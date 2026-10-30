@@ -778,16 +778,16 @@ function buildChatsDisplay(
 ): DisplayLine[] {
   const lines: DisplayLine[] = [];
 
-  // Header with back + account name + count
-  const accountName = state.selectedAccount
-    ? state.accounts.find((a) => a.accountID === state.selectedAccount)?.user
-        .fullName || "Chats"
-    : "All Platforms";
+  // Header: framed app name + chat counts (accounts sub-view removed — all
+  // chats are shown unified). ▐▌ half-blocks read as square-cornered frame.
+  const total = state.chats.length;
+  const win = getVisibleChatWindow(state.chats, highlightedIdx);
+  const shown = state.isLoading ? 0 : Math.min(win.visible.length, total);
   lines.push(
     line(
       buildHeaderLine(
-        `${ICONS.BACK} ${truncate(accountName, 20)}`,
-        `${state.chats.length}`,
+        `▐GazeChat▌ - displaying ${shown} of ${total} Chats`,
+        "",
       ),
       "inverted",
     ),
@@ -2107,7 +2107,7 @@ export function GlassesUI({
       // Keep startup screen visible while loading
       setState((s) => ({
         ...s,
-        selectedAccount: savedState.selectedAccount,
+        selectedAccount: null, // unified chat list — no per-messenger sub-view
         selectedChat: savedState.selectedChat,
         messageScrollOffset: savedState.chatScrollPosition || 0,
       }));
@@ -2173,10 +2173,11 @@ export function GlassesUI({
       const setupRequired = accounts.length === 0;
 
       if (savedState.selectedChat && !setupRequired) {
-        // We have a saved chat and real accounts - try to restore it
+        // We have a saved chat and real accounts - try to restore it.
+        // Always load the UNIFIED chat list (no account filter).
         await restoreSavedChat(
           accounts,
-          savedState.selectedAccount,
+          null,
           savedState.selectedChat,
         );
       } else {
@@ -2641,8 +2642,7 @@ export function GlassesUI({
           // Can't go back
           break;
         case "chats":
-          updates.currentScreen = "accounts";
-          updates.selectedAccount = null;
+          // Root level: back is handled by the exit dialog in GO_BACK
           break;
         case "messages":
           updates.currentScreen = "chats";
@@ -3055,7 +3055,8 @@ export function GlassesUI({
         case "GO_BACK": {
           // Even Hub submission requirement: root-page double-tap must show
           // the native exit dialogue. See page-lifecycle.md.
-          if (snapshot.currentScreen === "accounts") {
+          // The unified chat list is the root screen now.
+          if (snapshot.currentScreen === "chats" || snapshot.currentScreen === "accounts") {
             void getBridge().then((b) => b?.shutDownPageContainer(1));
             return nav;
           }
