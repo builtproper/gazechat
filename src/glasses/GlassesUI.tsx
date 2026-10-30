@@ -40,12 +40,7 @@ import {
 } from "@evenrealities/even_hub_sdk";
 import { getServiceIcon } from "./platformIcons";
 import {
-  getChatIconStripPng,
   pngDataUrlToBytes,
-  CHAT_ICON_X,
-  CHAT_ICON_START_Y,
-  CHAT_ICON_WIDTH,
-  CHAT_ROW_HEIGHT,
 } from "./platformImages";
 import type { SpeechApiConfig } from "../services";
 
@@ -608,7 +603,7 @@ async function loadMessageMediaImageBytes(url: string): Promise<Uint8Array> {
   }
 }
 
-function buildGlassesText(lines: DisplayLine[]): string {
+function buildGlassesText(lines: DisplayLine[], fullwidth = true): string {
   const text = lines
     .map((entry) => {
       if (entry.style === "separator") {
@@ -620,9 +615,33 @@ function buildGlassesText(lines: DisplayLine[]): string {
       return `  ${entry.text}`;
     })
     .join("\n");
-  // Convert to fullwidth so the proportional G2 font renders all display
-  // characters at a uniform width. This keeps manually-padded columns aligned.
-  return toFullwidth(text);
+  // Fullwidth conversion keeps manually-padded columns aligned on the
+  // proportional G2 font; the chat list skips it (pixel metrics instead).
+  return fullwidth ? toFullwidth(text) : text;
+}
+
+// ── spine image: rotated "GazeChat" wordmark (KM renderTextImage pattern) ──
+function renderSpineImage(text: string, w: number, h: number): Uint8Array {
+  const cv = document.createElement("canvas");
+  cv.width = w; cv.height = h;
+  const ctx = cv.getContext("2d")!;
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h); ctx.fillStyle = "#fff";
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  ctx.translate(w / 2, h / 2); ctx.rotate(-Math.PI / 2);
+  const fitLen = h - 6;
+  let size = 40;
+  for (; size >= 8; size--) {
+    ctx.font = `bold ${size}px monospace`;
+    if (ctx.measureText(text).width <= fitLen) break;
+  }
+  ctx.font = `bold ${size}px monospace`;
+  ctx.fillText(text, 0, 0);
+  const rgba = ctx.getImageData(0, 0, w, h).data;
+  const gray = new Uint8Array(w * h);
+  for (let i = 0, j = 0; i < rgba.length; i += 4, j++) {
+    gray[j] = (rgba[i] * 0.299 + rgba[i + 1] * 0.587 + rgba[i + 2] * 0.114) | 0;
+  }
+  return gray;
 }
 
 function getMaxIndex(state: AppState): number {
@@ -778,21 +797,6 @@ function buildChatsDisplay(
 ): DisplayLine[] {
   const lines: DisplayLine[] = [];
 
-  // Header: framed app name + chat counts (accounts sub-view removed — all
-  // chats are shown unified). ▐▌ half-blocks read as square-cornered frame.
-  const total = state.chats.length;
-  const win = getVisibleChatWindow(state.chats, highlightedIdx);
-  const shown = state.isLoading ? 0 : Math.min(win.visible.length, total);
-  lines.push(
-    line(
-      buildHeaderLine(
-        `▐GazeChat▌ - displaying ${shown} of ${total} Chats`,
-        "",
-      ),
-      "inverted",
-    ),
-  );
-
   if (state.isLoading) {
     // Show loading indicator
     lines.push(line("Loading...", "normal"));
@@ -822,26 +826,13 @@ function buildChatsDisplay(
       // badge column: fixed pixel width so names always start at the same x
       const BADGE_PX = 52; // fits [999] + gap; single digits get the 2-space gap via padding
       const badgeCol = padPx(badge ? badge + " " : "", BADGE_PX);
-      // name gets everything left of the line (~548px usable in the 572px container)
-      const namePx = 548 - textPx(marker) - textPx(badgeCol);
+      // name gets the rest of the list container width (~500px usable)
+      const namePx = 500 - textPx(marker) - textPx(badgeCol);
       const name = truncatePx(chat.title, namePx);
       const lineText = `${marker}${badgeCol}${name}`;
       lines.push(line(lineText, isSelected ? "inverted" : "normal"));
     });
   }
-
-  lines.push(sep());
-
-  // Show current position in list
-  const posText = state.isLoading
-    ? ""
-    : `${highlightedIdx + 1}/${state.chats.length}`;
-  lines.push(
-    line(
-      buildStaticActionBar(["Back"], -1) + (posText ? "  " + posText : ""),
-      "meta",
-    ),
-  );
 
   return lines;
 }
@@ -3215,70 +3206,53 @@ export function GlassesUI({
   const renderChatsPage = useCallback(
     async (bridge: EvenAppBridge, snapshot: AppState, nav: GlassNavState) => {
       const lines = buildChatsDisplay(snapshot, nav.highlightedIndex);
-      const text = buildGlassesText(lines);
-      const { visible } = getVisibleChatWindow(
-        snapshot.chats,
-        nav.highlightedIndex,
-      );
-      const platformIds = visible.map((chat) => chat.accountID);
-      const iconSignature = platformIds.join("|");
-      // Image containers are limited to 144px height on G2 hardware.
-      const maxIconRows = Math.floor(144 / CHAT_ROW_HEIGHT);
-      const iconRows = Math.min(MAX_VISIBLE_ITEMS - 2, maxIconRows);
-      const iconHeight = iconRows * CHAT_ROW_HEIGHT;
-      const shouldRenderIcons =
-        glassesChatIconsEnabledRef.current && visible.length > 0;
-      const targetLayout: "text" | "chats" = shouldRenderIcons
-        ? "chats"
-        : "text";
-
-      if (targetLayout === "text") {
-        await renderTextPage(bridge, text);
-        return;
-      }
+      const text = buildGlassesText(lines, false);
 
       if (glassesLayoutRef.current !== "chats") {
+        // Spine column (framed, rotated GazeChat wordmark) + full-height list
         await bridge.rebuildPageContainer(
           new RebuildPageContainer({
             containerTotalNum: 3,
             textObject: [
               new TextContainerProperty({
                 containerID: BASE_PAGE_CONTAINER.OVERLAY_ID,
-                containerName: BASE_PAGE_CONTAINER.OVERLAY_NAME,
-                xPosition: 0,
-                yPosition: 0,
-                width: GLASSES_DISPLAY_WIDTH,
-                height: GLASSES_DISPLAY_HEIGHT,
-                borderWidth: 0,
-                borderColor: 0,
+                containerName: "spineframe",
+                xPosition: 2,
+                yPosition: 2,
+                width: 52,
+                height: 284,
+                borderWidth: 1,
+                borderColor: 8,
                 borderRadius: 0,
                 paddingLength: 0,
-                content: "",
-                isEventCapture: 1,
+                content: " ",
+                zOrderIndex: 1,
               }),
               new TextContainerProperty({
                 containerID: BASE_PAGE_CONTAINER.TEXT_ID,
-                containerName: BASE_PAGE_CONTAINER.TEXT_NAME,
-                xPosition: 0,
-                yPosition: 0,
-                width: GLASSES_DISPLAY_WIDTH,
-                height: GLASSES_DISPLAY_HEIGHT,
+                containerName: "list",
+                xPosition: 60,
+                yPosition: 2,
+                width: 512,
+                height: 284,
                 borderWidth: 0,
                 borderColor: 0,
                 borderRadius: 0,
-                paddingLength: 6,
+                paddingLength: 2,
                 content: text,
-                isEventCapture: 0,
+                isEventCapture: 1,
+                zOrderIndex: 3,
               }),
             ],
             imageObject: [
               new ImageContainerProperty({
                 containerID: BASE_PAGE_CONTAINER.CHAT_IMAGE_ID,
-                containerName: BASE_PAGE_CONTAINER.CHAT_IMAGE_NAME,
-                xPosition: CHAT_ICON_X,
-                yPosition: CHAT_ICON_START_Y,
-                width: CHAT_ICON_WIDTH,
-                height: iconHeight,
+                containerName: "spine",
+                xPosition: 6,
+                yPosition: 72,
+                width: 44,
+                height: 144,
+                zOrderIndex: 2,
               }),
             ],
             listObject: [],
@@ -3286,53 +3260,32 @@ export function GlassesUI({
         );
         glassesLayoutRef.current = "chats";
         glassesTextRef.current = text;
-        glassesChatIconSignatureRef.current = "";
-      } else if (glassesTextRef.current !== text) {
+        try {
+          await bridge.updateImageRawData(
+            new ImageRawDataUpdate({
+              containerID: BASE_PAGE_CONTAINER.CHAT_IMAGE_ID,
+              containerName: "spine",
+              imageData: Array.from(renderSpineImage("GazeChat", 44, 144)),
+            }),
+          );
+        } catch (e) {
+          console.warn("[GlassesUI] spine image failed:", e);
+        }
+        return;
+      }
+
+      if (glassesTextRef.current !== text) {
         await bridge.textContainerUpgrade(
           new TextContainerUpgrade({
             containerID: BASE_PAGE_CONTAINER.TEXT_ID,
-            containerName: BASE_PAGE_CONTAINER.TEXT_NAME,
-            contentOffset: 0,
-            contentLength: text.length,
+            containerName: "list",
             content: text,
           }),
         );
         glassesTextRef.current = text;
       }
-
-      if (glassesChatIconSignatureRef.current === iconSignature) {
-        return;
-      }
-
-      const iconStripBytes = await getChatIconStripPng(
-        platformIds,
-        iconRows,
-        CHAT_ROW_HEIGHT,
-        CHAT_ICON_WIDTH,
-      );
-
-      try {
-        await bridge.updateImageRawData(
-          new ImageRawDataUpdate({
-            containerID: BASE_PAGE_CONTAINER.CHAT_IMAGE_ID,
-            containerName: BASE_PAGE_CONTAINER.CHAT_IMAGE_NAME,
-            imageData: iconStripBytes,
-          }),
-        );
-      } catch (e) {
-        glassesChatIconsEnabledRef.current = false;
-        glassesLayoutRef.current = null;
-        glassesChatIconSignatureRef.current = "";
-        console.warn(
-          "[GlassesUI] Disabling chat icons after image update failure:",
-          e,
-        );
-        await renderTextPage(bridge, text);
-        return;
-      }
-      glassesChatIconSignatureRef.current = iconSignature;
     },
-    [renderTextPage],
+    [],
   );
 
   const flushGlassesDisplay = useCallback(async () => {
