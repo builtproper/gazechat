@@ -3225,7 +3225,7 @@ export function GlassesUI({
       // ~40px item height (measured on simulator 30.10.) → only 7 rows. Text
       // containers use the firmware line height (~20px) → 11 rows fit, and the
       // names + preview columns share the exact same pitch (no drift).
-      const ROWS = 11;
+      const ROWS = 10;
       const total = snapshot.chats.length;
       const totalPages = Math.max(1, Math.ceil(total / ROWS));
       const page = Math.max(0, Math.min(Math.floor(nav.highlightedIndex / ROWS), totalPages - 1));
