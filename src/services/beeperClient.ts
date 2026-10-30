@@ -222,15 +222,6 @@ function normalizeMessage(message: BeeperMessage): BeeperMessage {
   }
 }
 
-function extractDomain(url: string): string {
-  try {
-    return new URL(url).hostname.replace(/^www\./, "")
-  } catch {
-    const cleaned = url.replace(/^https?:\/\//, "").replace(/^www\./, "")
-    return cleaned.split("/")[0]
-  }
-}
-
 export function formatMessageText(msg: BeeperMessage): string {
   const { text, textEntities } = getNormalizedMessageTextParts(msg)
   if (!text || textEntities.length === 0) {
@@ -247,11 +238,18 @@ export function formatMessageText(msg: BeeperMessage): string {
       if (e.from == null || e.to == null) continue
 
       if (e.link) {
+        // Prefer the visible link text; fall back to the URL itself
+        // (scheme stripped, max 100 chars). Beeper's API carries no cached
+        // page title, so a title can only come from the link text.
+        const shown = text.slice(e.from, e.to).trim()
+        const clean = e.link.replace(/^https?:\/\//i, "").replace(/^www\./i, "")
+        const trimmed = clean.length > 100 ? clean.slice(0, 100) + "…" : clean
+        const label = shown && shown !== e.link ? shown : trimmed
         entities.push({
           type: "link",
           from: e.from,
           to: e.to,
-          label: `[Link] ${extractDomain(e.link)}`,
+          label,
         })
       } else if (e.mentionedUser) {
         const raw = text.slice(e.from, e.to)

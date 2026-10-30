@@ -222,22 +222,67 @@ async function saveState(state: SavedState): Promise<void> {
 // Strip emoji and other unsupported Unicode characters for glasses display
 // Glasses only support basic Latin, numbers, punctuation, and common symbols
 function stripUnsupportedChars(text: string): string {
-  // Remove emoji (U+1F000 to U+1FFFF range)
-  // Also remove other symbols like playing cards, misc symbols, dingbats beyond what we use
+  // HTML/entity sanitizing first (some Beeper bridges deliver raw HTML)
+  text = sanitizeHtmlAndEntities(text)
+  // Emoji are passed through: the G2 firmware renders the common ones
+  // (verified on device: 😀 ❤). Unknown glyphs are skipped by the firmware.
   return text
-    .replace(/[\u{1F300}-\u{1F9FF}]/gu, "[emoji]") // Misc symbols and emoji
-    .replace(/[\u{1FA00}-\u{1FAFF}]/gu, "[emoji]") // Symbols and Pictographs Extended-A (includes U+1FAF0 Love-You gesture)
-    .replace(/[\u{2600}-\u{26FF}]/gu, "") // Misc symbols
-    .replace(/[\u{2700}-\u{27BF}]/gu, "") // Dingbats
     .replace(/[\u{1F000}-\u{1F02F}]/gu, "") // Mahjong tiles
     .replace(/[\u{1F0A0}-\u{1F0FF}]/gu, "") // Playing cards
-    .replace(/[\u{1F680}-\u{1F6FF}]/gu, "") // Transport and map symbols
-    .replace(/[\u{1F700}-\u{1F77F}]/gu, ""); // Alchemical symbols
+    .replace(/[\u{1F700}-\u{1F77F}]/gu, "") // Alchemical symbols
+    .replace(/[\u200B-\u200F\u2028\u2029\uFEFF]/g, "") // zero-width / bidi marks
+}
+
+// Sanitize HTML markup and entities that some channels deliver verbatim.
+function sanitizeHtmlAndEntities(text: string): string {
+  let t = text
+  // line-break tags
+  t = t.replace(/<br\s*\/?>/gi, "\n")
+  t = t.replace(/<\/?p[^>]*>/gi, "\n")
+  // <a href="url">label</a> → label, else url (max 100 chars, scheme stripped)
+  t = t.replace(
+    /<a\s+[^>]*href=["']([^"']*)["'][^>]*>([\s\S]*?)<\/a>/gi,
+    (_m, href: string, label: string) => {
+      const l = label.replace(/<[^>]*>/g, "").trim()
+      if (l) return l
+      const clean = href.replace(/^https?:\/\//i, "").replace(/^www\./i, "")
+      return clean.length > 100 ? clean.slice(0, 100) + "…" : clean
+    },
+  )
+  // bare long URLs → trim to 100 chars (scheme stripped) for readability
+  t = t.replace(/https?:\/\/\S{101,}/gi, (u) => {
+    const clean = u.replace(/^https?:\/\//i, "")
+    return clean.slice(0, 100) + "…"
+  })
+  // all remaining tags (<strong>, <em>, <font>, ...) are dropped, content kept
+  t = t.replace(/<[^>]+>/g, "")
+  // entities (&amp; LAST to avoid double-decoding)
+  t = t
+    .replace(/&nbsp;/gi, " ")
+    .replace(/&gt;/gi, ">")
+    .replace(/&lt;/gi, "<")
+    .replace(/&quot;/gi, '"')
+    .replace(/&#0?39;/g, "'")
+    .replace(/&apos;/gi, "'")
+    .replace(/&amp;/gi, "&")
+  // collapse 3+ newlines, trim trailing spaces per line
+  t = t.replace(/[ \t]+$/gm, "").replace(/\n{3,}/g, "\n\n")
+  return t
 }
 
 // Helper: create a separator line (using meta style so text renders)
 function sep(): DisplayLine {
   return line(SEPARATOR_LINE, "meta");
+}
+
+// Own messages often arrive with a raw bridge address like "@user:beeper.com"
+// as senderName — show a friendly "Me" instead.
+function senderLabel(msg: { isSender?: boolean; senderName?: string; senderID?: string }): string {
+  const name = (msg.senderName || "").trim()
+  if (msg.isSender || /^@[^:]+:beeper\.com$/i.test(name) || /^@[^:]+:beeper\.com$/i.test(msg.senderID || "")) {
+    return "Me"
+  }
+  return name
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -826,9 +871,7 @@ function buildMessagesDisplay(
       const globalIdx = start + idx;
       const isSelected = globalIdx === selectedIdx;
       const time = formatTime(msg.timestamp);
-      const sender = msg.isSender
-        ? ">"
-        : truncateName(msg.senderName || "?", 8);
+      const sender = truncateName(senderLabel(msg) || "?", 8);
       const prefix = `[${time}] ${sender}: `;
       const preview = truncate(
         getMessagePreview(msg),
@@ -877,7 +920,7 @@ function buildMessageDetailDisplay(
     return lines;
   }
 
-  const sender = truncateName(msg.senderName || msg.senderID || "Unknown", 20);
+  const sender = truncateName(senderLabel(msg) || msg.senderID || "Unknown", 20);
   const time = formatTime(msg.timestamp);
   const wrappedBody = getMessageDetailWrappedBody(msg);
   const hasLoadedImage = imageStatus === "loaded";
@@ -921,7 +964,7 @@ function buildQuickReplyDisplay(
 
   const msg = state.messages[state.selectedMessageIndex];
   const sender = msg
-    ? truncateName(msg.senderName || "Unknown", 16)
+    ? truncateName(senderLabel(msg) || "Unknown", 16)
     : "Unknown";
   lines.push(line(buildHeaderLine(`Reply: ${sender}`, ""), "inverted"));
 
@@ -964,7 +1007,7 @@ function buildVoiceReplyDisplay(state: AppState): DisplayLine[] {
   const lines: DisplayLine[] = [];
   const msg = state.messages[state.selectedMessageIndex];
   const sender = msg
-    ? truncateName(msg.senderName || "Unknown", 16)
+    ? truncateName(senderLabel(msg) || "Unknown", 16)
     : "Unknown";
   const status = state.voiceStatus || "Speak now";
   const isVoiceReady = state.voiceTranscript.trim().length > 0;
@@ -1055,7 +1098,7 @@ function buildStartupDisplay(tick: number): DisplayLine[] {
 
 function getSelectedSender(state: AppState): string {
   const msg = state.messages[state.selectedMessageIndex];
-  return truncateName(msg?.senderName || "Unknown", 20);
+  return truncateName(senderLabel(msg ?? {}) || "Unknown", 20);
 }
 
 function buildQuickReplyItems(): string[] {
@@ -1074,7 +1117,7 @@ function buildVoiceCardContent(state: AppState): string {
 }
 
 function buildMessageDetailContent(msg: BeeperMessage): string {
-  const sender = stripUnsupportedChars(msg.senderName || msg.senderID || "Unknown");
+  const sender = stripUnsupportedChars(senderLabel(msg) || msg.senderID || "Unknown");
   const time = stripUnsupportedChars(formatTime(msg.timestamp));
   const fullText = stripUnsupportedChars(formatMessageText(msg));
 
