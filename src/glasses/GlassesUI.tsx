@@ -1423,6 +1423,7 @@ export function GlassesUI({
   const glassesChatIconsEnabledRef = useRef<boolean>(false);
   const chatPageRef = useRef<number>(0); // current page of the chat list
   const chatPageSigRef = useRef<string>("");
+  const chatPageRenderedAtRef = useRef<number>(0); // timestamp of last list build (guards initial selection event)
   const chatListSelRef = useRef<number>(0); // firmware selection within page
   const isRenderingGlassesRef = useRef<boolean>(false);
   const pendingGlassesRenderRef = useRef<boolean>(false);
@@ -2140,11 +2141,18 @@ export function GlassesUI({
         await new Promise((r) => setTimeout(r, MIN_STARTUP_MS - elapsed));
       }
 
-      // Transition to the real screen now that data is ready
+      // Transition to the real screen now that data is ready.
+      // The unified chat list is the home screen — always land there, never
+      // resume into a chat (root-page double-tap-exit must stay reachable).
       setState((s) => ({
         ...s,
-        currentScreen: s.selectedChat ? "messages" : "chats",
+        currentScreen: "chats",
+        selectedChat: null,
       }));
+      await saveState({
+        selectedAccount: null,
+        selectedChat: null,
+      });
     }
 
     async function loadData(savedState: SavedState) {
@@ -3234,6 +3242,7 @@ export function GlassesUI({
 
       if (glassesLayoutRef.current !== "chats" || chatPageSigRef.current !== pageSig) {
         chatPageSigRef.current = pageSig;
+        chatPageRenderedAtRef.current = Date.now();
         const rb = await bridge.rebuildPageContainer(
           new RebuildPageContainer({
             containerTotalNum: 6,
@@ -3403,13 +3412,20 @@ export function GlassesUI({
               return;
             }
             if (et === OsEventTypeList.CLICK_EVENT || et === undefined) {
-              // selection click: open the chat at global index
+              // Guard: the firmware fires an initial selection event right
+              // after the list is built — never treat that as a tap.
+              if (Date.now() - chatPageRenderedAtRef.current < 600) return;
               const globalIdx = chatPageRef.current * ROWS + idx;
               if (globalIdx < total) {
                 navRef.current = { ...navRef.current, highlightedIndex: globalIdx };
-                setNavVersion((v) => v + 1);
+                setState((s) => {
+                  const updates = handleSelectRef.current(s, globalIdx);
+                  return { ...s, ...updates };
+                });
               }
+              return; // never fall through to mapGlassEvent (double-open)
             }
+            return; // any other list event on the chats screen: consume
           }
 
           const action = mapGlassEvent(event);
