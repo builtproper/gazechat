@@ -1421,6 +1421,7 @@ export function GlassesUI({
   const glassesChatIconSignatureRef = useRef<string>("");
   const glassesChatIconsEnabledRef = useRef<boolean>(false);
   const chatPageSigRef = useRef<string>("");
+  const chatSelSigRef = useRef<string>("");
   const chatPageRenderedAtRef = useRef<number>(0); // timestamp of last list build
   const isRenderingGlassesRef = useRef<boolean>(false);
   const pendingGlassesRenderRef = useRef<boolean>(false);
@@ -3221,10 +3222,11 @@ export function GlassesUI({
 
   const renderChatsPage = useCallback(
     async (bridge: EvenAppBridge, snapshot: AppState, nav: GlassNavState) => {
-      // Page-based chat list with text containers: the native list has a FIXED
-      // ~40px item height (measured on simulator 30.10.) → only 7 rows. Text
-      // containers use the firmware line height (~20px) → 11 rows fit, and the
-      // names + preview columns share the exact same pitch (no drift).
+      // Page-based chat list with text containers (native list is fixed ~40px
+      // rows → only 7). 10 rows fit the 284px container without scrollbars.
+      // Selection moves only UPGRADE the names container (no page rebuild →
+      // no flash/jump); page flips upgrade names+preview+xy; only the first
+      // entry into the chats screen rebuilds the whole page.
       const ROWS = 10;
       const total = snapshot.chats.length;
       const totalPages = Math.max(1, Math.ceil(total / ROWS));
@@ -3240,35 +3242,59 @@ export function GlassesUI({
         const raw = ((c as any).preview?.text || "") as string;
         return truncatePx(raw.replace(/\n/g, " ").trim(), 240);
       });
+      const namesText = names.join("\n");
+      const previewText = previews.join("\n");
+      const xyText = `${page + 1}/${totalPages}`;
 
-      const sig = `${page}|${nav.highlightedIndex}|${names.join("|")}`;
-      if (glassesLayoutRef.current === "chats" && chatPageSigRef.current === sig) return;
-      chatPageSigRef.current = sig;
-      chatPageRenderedAtRef.current = Date.now();
+      const pageSig = `${page}|${pageChats.map((c) => c.id).join(",")}`;
+      const selSig = `${nav.highlightedIndex}`;
 
-      const rb = await bridge.rebuildPageContainer(
-        new RebuildPageContainer({
-          containerTotalNum: 6,
-          textObject: [
-            new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: clockText(), textColor: 2, zOrderIndex: 1 }),
-            new TextContainerProperty({ containerID: 2, containerName: "spineframe", xPosition: 2, yPosition: 40, width: 52, height: 156, paddingLength: 0, borderWidth: 1, borderColor: 8, borderRadius: 0, content: " ", zOrderIndex: 2 }),
-            new TextContainerProperty({ containerID: 3, containerName: "xy", xPosition: 2, yPosition: 250, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: `${page + 1}/${totalPages}`, textColor: 2, zOrderIndex: 3 }),
-            new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 60, yPosition: 2, width: 256, height: 284, paddingLength: 2, borderWidth: 0, borderColor: 0, borderRadius: 0, content: names.join("\n"), isEventCapture: 1, zOrderIndex: 4 }),
-            new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 320, yPosition: 2, width: 254, height: 284, paddingLength: 2, borderWidth: 0, borderColor: 0, borderRadius: 0, content: previews.join("\n"), textColor: 3, zOrderIndex: 5 }),
-          ],
-          imageObject: [
-            new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 6, yPosition: 46, width: 44, height: 144, zOrderIndex: 6 }),
-          ],
-          listObject: [],
-        }),
-      );
-      glassesLayoutRef.current = "chats";
-      console.log("[chats] rebuild:", rb ? "ok" : "FAILED", "page", page + 1, "/", totalPages);
-      try {
-        const bytes = await getSpineBytes();
-        await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 6, containerName: "spine", imageData: bytes }));
-      } catch (e) {
-        console.warn("[chats] spine failed:", e);
+      if (glassesLayoutRef.current !== "chats") {
+        // full page build (first entry into the chats screen)
+        chatPageSigRef.current = pageSig;
+        chatSelSigRef.current = selSig;
+        chatPageRenderedAtRef.current = Date.now();
+        const rb = await bridge.rebuildPageContainer(
+          new RebuildPageContainer({
+            containerTotalNum: 6,
+            textObject: [
+              new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: clockText(), textColor: 2, zOrderIndex: 1 }),
+              new TextContainerProperty({ containerID: 2, containerName: "spineframe", xPosition: 2, yPosition: 40, width: 52, height: 156, paddingLength: 0, borderWidth: 1, borderColor: 8, borderRadius: 0, content: " ", zOrderIndex: 2 }),
+              new TextContainerProperty({ containerID: 3, containerName: "xy", xPosition: 2, yPosition: 250, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 3 }),
+              new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 60, yPosition: 2, width: 256, height: 284, paddingLength: 2, borderWidth: 0, borderColor: 0, borderRadius: 0, content: namesText, isEventCapture: 1, zOrderIndex: 4 }),
+              new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 320, yPosition: 2, width: 254, height: 284, paddingLength: 2, borderWidth: 0, borderColor: 0, borderRadius: 0, content: previewText, textColor: 2, zOrderIndex: 5 }),
+            ],
+            imageObject: [
+              new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 6, yPosition: 46, width: 44, height: 144, zOrderIndex: 6 }),
+            ],
+            listObject: [],
+          }),
+        );
+        glassesLayoutRef.current = "chats";
+        console.log("[chats] rebuild:", rb ? "ok" : "FAILED", "page", page + 1, "/", totalPages);
+        try {
+          const bytes = await getSpineBytes();
+          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 6, containerName: "spine", imageData: bytes }));
+        } catch (e) {
+          console.warn("[chats] spine failed:", e);
+        }
+        return;
+      }
+
+      if (chatPageSigRef.current !== pageSig) {
+        // page flip: upgrade the three content containers (no rebuild flash)
+        chatPageSigRef.current = pageSig;
+        chatSelSigRef.current = selSig;
+        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 4, containerName: "names", content: namesText }));
+        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 5, containerName: "preview", content: previewText }));
+        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 3, containerName: "xy", content: xyText }));
+        return;
+      }
+
+      if (chatSelSigRef.current !== selSig) {
+        // selection moved within the page: only the names column changes
+        chatSelSigRef.current = selSig;
+        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 4, containerName: "names", content: namesText }));
       }
     },
     [],
