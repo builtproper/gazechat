@@ -51,7 +51,6 @@ import type { SpeechApiConfig } from "../services";
 // Even G2: 576px wide, ~288px tall
 // Font: 22px Courier New monospace (~12px per char)
 // Visible width: ~48 chars, but leaving padding, use 40 chars
-const MAX_VISIBLE_ITEMS = 8; // Max items visible on screen
 const DISPLAY_WIDTH = 60; // Max characters per line
 const DISPLAY_LINES = 8; // Max lines on Even G2 display (288px / ~40px per line)
 const STICKY_FOOTER_LINES = 2; // separator + bottom action/menu line
@@ -64,7 +63,7 @@ const MESSAGE_MEDIA_IMAGE_X = Math.floor(
   (GLASSES_DISPLAY_WIDTH - MESSAGE_MEDIA_IMAGE_WIDTH) / 2,
 );
 const MESSAGE_MEDIA_IMAGE_Y = 0;
-const ENABLE_CUSTOM_GLASSES_RENDERER = false;
+const ENABLE_CUSTOM_GLASSES_RENDERER = true;
 const STARTUP_DELAY_MS = 1200; // Brief delay so OS registers the startup render
 const DEFAULT_BEEPER_BASE_URL = "http://localhost:23373";
 
@@ -422,7 +421,7 @@ function getVisibleChatWindow(
   chats: BeeperChat[],
   highlightedIdx: number,
 ): { start: number; visible: BeeperChat[] } {
-  const maxItems = MAX_VISIBLE_ITEMS - 2; // Leave room for header and action bar
+  const maxItems = 9; // full-height list container: 284px / ~28px per line (KM fits 10)
   const maxStart = Math.max(0, chats.length - maxItems);
   const start = Math.max(0, Math.min(maxStart, highlightedIdx - 1));
 
@@ -3199,7 +3198,7 @@ export function GlassesUI({
 
       if (glassesLayoutRef.current !== "chats") {
         // Spine column (framed, rotated GazeChat wordmark) + full-height list
-        await bridge.rebuildPageContainer(
+        const rb = await bridge.rebuildPageContainer(
           new RebuildPageContainer({
             containerTotalNum: 3,
             textObject: [
@@ -3249,14 +3248,18 @@ export function GlassesUI({
         );
         glassesLayoutRef.current = "chats";
         glassesTextRef.current = text;
+        console.log("[chats] rebuild:", rb ? "ok" : "FAILED");
         try {
-          await bridge.updateImageRawData(
+          const bytes = await getSpineBytes();
+          console.log("[chats] spine bytes:", bytes.length);
+          const imgOk = await bridge.updateImageRawData(
             new ImageRawDataUpdate({
               containerID: BASE_PAGE_CONTAINER.CHAT_IMAGE_ID,
               containerName: "spine",
-              imageData: await getSpineBytes(),
+              imageData: bytes,
             }),
           );
+          console.log("[chats] spine update:", JSON.stringify(imgOk));
         } catch (e) {
           console.warn("[GlassesUI] spine image failed:", e);
         }
