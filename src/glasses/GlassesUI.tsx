@@ -267,6 +267,7 @@ interface AppState {
   voiceStatus: string | null;
   voiceTranscript: string;
   voiceAudioBytes: number;
+  startupTick: number; // drives the loading-box dot animation
 }
 
 interface TranscriptionResponse {
@@ -1028,7 +1029,7 @@ function buildVoiceReplyDisplay(state: AppState): DisplayLine[] {
   return lines;
 }
 
-function buildStartupDisplay(): DisplayLine[] {
+function buildStartupDisplay(tick: number): DisplayLine[] {
   const lines: DisplayLine[] = [];
   const time = new Date().toLocaleTimeString([], {
     hour: "2-digit",
@@ -1036,9 +1037,17 @@ function buildStartupDisplay(): DisplayLine[] {
   });
   lines.push(line(buildHeaderLine("Message Lens", time), "inverted"));
   lines.push(sep());
-  lines.push(line("  Loading...", "normal"));
+
+  // Centered framed loading box with animated dots (fixed width, no jitter)
+  const dots = ".".repeat(tick % 4);
+  const text = "Loading messages";
+  const inner = text.length + 6; // room for "  " + up to 3 dots
+  const left = Math.max(0, Math.floor((DISPLAY_WIDTH - (inner + 2)) / 2));
+  const pad = " ".repeat(left);
   lines.push(line("", "normal"));
-  lines.push(line("", "normal"));
+  lines.push(line(`${pad}┌${"─".repeat(inner)}┐`, "normal"));
+  lines.push(line(`${pad}│  ${padRight(text + dots, inner - 2)}│`, "normal"));
+  lines.push(line(`${pad}└${"─".repeat(inner)}┘`, "normal"));
   lines.push(sep());
   lines.push(line("", "meta"));
   return lines;
@@ -1304,6 +1313,7 @@ export function GlassesUI({
     voiceStatus: null,
     voiceTranscript: "",
     voiceAudioBytes: 0,
+    startupTick: 0,
   });
 
   // Ref to store saved state for use in effects
@@ -1355,6 +1365,10 @@ export function GlassesUI({
   );
 
   const beeper = beeperConfig ? new BeeperClient(beeperConfig) : null;
+
+  // Latest client for the boot retry loop (config can arrive late on slow phones)
+  const beeperRef = useRef<BeeperClient | null>(beeper);
+  beeperRef.current = beeper;
 
   useEffect(() => {
     stateRef.current = state;
@@ -1981,11 +1995,25 @@ export function GlassesUI({
     return () => window.clearTimeout(timeoutId);
   }, [state.currentScreen, state.isLoading, state.selectedChat]);
 
+  // Animate the startup loading box while it is visible
+  useEffect(() => {
+    if (state.currentScreen !== "startup") return;
+    const id = window.setInterval(() => {
+      setState((s) =>
+        s.currentScreen === "startup"
+          ? { ...s, startupTick: s.startupTick + 1 }
+          : s,
+      );
+    }, 400);
+    return () => window.clearInterval(id);
+  }, [state.currentScreen]);
+
   // Load saved state and initial data
   useEffect(() => {
     async function init() {
       const startTime = Date.now();
       const MIN_STARTUP_MS = 1000;
+      const CONNECT_TIMEOUT_MS = 12000; // keep retrying before "Open your phone"
 
       // First, load the saved state from storage
       const savedState = await loadSavedState();
@@ -1999,8 +2027,38 @@ export function GlassesUI({
         messageScrollOffset: savedState.chatScrollPosition || 0,
       }));
 
-      // Then load data (startup screen stays visible)
-      await loadData(savedState);
+      // Then load data (startup screen stays visible).
+      // Retry until the connect deadline: on a slow phone the Beeper config or
+      // the desktop API may simply not be reachable yet at first attempt.
+      let lastError: unknown = null;
+      while (Date.now() - startTime < CONNECT_TIMEOUT_MS) {
+        try {
+          await loadData(savedState);
+          lastError = null;
+          break;
+        } catch (e) {
+          lastError = e;
+          await new Promise((r) => setTimeout(r, 1200));
+        }
+      }
+
+      if (lastError) {
+        console.warn("[GlassesUI] Beeper setup required:", lastError);
+        setState((s) => ({
+          ...s,
+          accounts: [],
+          chats: [],
+          selectedChat: null,
+          isLoading: false,
+          setupRequired: true,
+        }));
+        if (savedState.selectedChat) {
+          await saveState({
+            selectedAccount: savedState.selectedAccount,
+            selectedChat: null,
+          });
+        }
+      }
 
       // Enforce minimum startup visibility so the user sees the splash
       const elapsed = Date.now() - startTime;
@@ -2016,63 +2074,46 @@ export function GlassesUI({
     }
 
     async function loadData(savedState: SavedState) {
-      try {
-        if (!beeper) {
-          throw new Error("Beeper is not configured");
-        }
+      // Use the latest client: on a slow phone the Beeper config can arrive
+      // only after the first boot attempt has already run.
+      const client = beeperRef.current;
+      if (!client) {
+        throw new Error("Beeper is not configured");
+      }
 
-        const accounts = await beeper.listAccounts();
+      const accounts = await client.listAccounts();
 
-        // If we have a saved state with an account, load chats for that account first
-        // Otherwise, show the chat list once configuration is valid.
-        const setupRequired = accounts.length === 0;
+      // If we have a saved state with an account, load chats for that account first
+      // Otherwise, show the chat list once configuration is valid.
+      const setupRequired = accounts.length === 0;
 
-        if (savedState.selectedChat && !setupRequired) {
-          // We have a saved chat and real accounts - try to restore it
-          await restoreSavedChat(
-            accounts,
-            savedState.selectedAccount,
-            savedState.selectedChat,
-          );
-        } else {
-          // No saved chat, or Beeper needs configuration.
-          setState((s) => ({
-            ...s,
-            accounts,
-            chats: [],
-            isLoading: false,
-            setupRequired,
-          }));
-
-          if (savedState.selectedChat && setupRequired) {
-            await saveState({
-              selectedAccount: savedState.selectedAccount,
-              selectedChat: null,
-            });
-            setState((s) => ({
-              ...s,
-              selectedAccount: savedState.selectedAccount,
-              selectedChat: null,
-            }));
-          }
-        }
-      } catch (e) {
-        console.warn("[GlassesUI] Beeper setup required:", e);
-
+      if (savedState.selectedChat && !setupRequired) {
+        // We have a saved chat and real accounts - try to restore it
+        await restoreSavedChat(
+          accounts,
+          savedState.selectedAccount,
+          savedState.selectedChat,
+        );
+      } else {
+        // No saved chat, or Beeper needs configuration.
         setState((s) => ({
           ...s,
-          accounts: [],
+          accounts,
           chats: [],
-          selectedChat: null,
           isLoading: false,
-          setupRequired: true,
+          setupRequired,
         }));
 
-        if (savedState.selectedChat) {
+        if (savedState.selectedChat && setupRequired) {
           await saveState({
             selectedAccount: savedState.selectedAccount,
             selectedChat: null,
           });
+          setState((s) => ({
+            ...s,
+            selectedAccount: savedState.selectedAccount,
+            selectedChat: null,
+          }));
         }
       }
     }
@@ -2082,11 +2123,12 @@ export function GlassesUI({
       savedAccountId: string | null,
       savedChatId: string,
     ) {
-      if (!beeper) return;
+      const client = beeperRef.current;
+      if (!client) return;
 
       try {
         // Load chats for the saved account (or all chats if no specific account)
-        const result = await beeper.listChats(
+        const result = await client.listChats(
           savedAccountId ? { accountIDs: [savedAccountId] } : undefined,
         );
         const loadedChats = result.chats;
@@ -2772,7 +2814,7 @@ export function GlassesUI({
         case "accounts":
           return buildAccountsDisplay(snapshot, nav.highlightedIndex);
         case "startup":
-          return buildStartupDisplay();
+          return buildStartupDisplay(snapshot.startupTick);
         case "chats":
           return buildChatsDisplay(snapshot, nav.highlightedIndex);
         case "messages":
