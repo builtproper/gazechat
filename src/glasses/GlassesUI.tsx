@@ -38,11 +38,13 @@ import {
   TextContainerProperty,
   TextContainerUpgrade,
 } from "@evenrealities/even_hub_sdk";
-import { getServiceIcon } from "./platformIcons";
+import { getServiceIcon, getPlatformIcon } from "./platformIcons";
 import {
   pngDataUrlToBytes,
+  normalizePlatform,
 } from "./platformImages";
 import type { SpeechApiConfig } from "../services";
+import { getApiConfig } from "../services/config";
 
 // ═══════════════════════════════════════════════════════════════
 // DISPLAY CONSTANTS
@@ -631,6 +633,123 @@ async function getSpineBytes(): Promise<number[]> {
   const buf = new Uint8Array(await blob.arrayBuffer());
   spineBytes = Array.from(buf);
   return spineBytes;
+}
+
+
+// ── avatar strip composer ───────────────────────────────────────────────────
+// Renders one page of chat avatars into a vertical strip: grayscale avatar
+// with the messenger icon (top-right) and unread badge (bottom-right) baked
+// in. Media comes from Beeper /v1/assets/serve (token-authenticated); on any
+// failure we draw the chat initials instead so the layout never breaks.
+const AV = 56; // avatar cell size (2 text lines tall)
+
+function drawMonoIcon(ctx: CanvasRenderingContext2D, bitmap: readonly number[], x: number, y: number, s: number) {
+  // 16x16 1-bit bitmap (2 bytes/row, MSB first) scaled to s px
+  const px = s / 16;
+  ctx.fillStyle = "#fff";
+  for (let row = 0; row < 16; row++) {
+    const b0 = bitmap[row * 2], b1 = bitmap[row * 2 + 1];
+    for (let col = 0; col < 16; col++) {
+      const byte = col < 8 ? b0 : b1;
+      const bit = (byte >> (7 - (col % 8))) & 1;
+      if (bit) ctx.fillRect(x + col * px, y + row * px, Math.ceil(px), Math.ceil(px));
+    }
+  }
+}
+
+const avatarCache = new Map<string, string>(); // chatId -> dataURL of composed cell
+
+async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promise<string> {
+  const key = chat.id + "|" + (chat.unreadCount || 0) + "|" + (chat.accountID || "");
+  const hit = avatarCache.get(key);
+  if (hit) return hit;
+  const cv = document.createElement("canvas");
+  cv.width = AV; cv.height = AV;
+  const ctx = cv.getContext("2d")!;
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, AV, AV);
+  // avatar image (best effort)
+  let drew = false;
+  try {
+    // WhatsApp puts the avatar on the participant, not the chat object
+    const raw: string | undefined =
+      chat.imgURL ||
+      (chat.participants?.items || []).find((p: any) => !p.isSelf && p.imgURL)?.imgURL;
+    if (raw && baseUrl) {
+      const base = normalizeBeeperBaseUrl(baseUrl);
+      // Beeper stores avatars as local file paths; the HTTP gateway serves
+      // them via /v1/assets/serve?url=... (token-authenticated).
+      const assetUrl = /^([a-zA-Z]:\\|file:\/\/)/i.test(raw)
+        ? `${base}/v1/assets/serve?url=${encodeURIComponent(raw)}`
+        : buildBeeperAssetUrl(base, raw);
+      const token = (await getApiConfig())?.token;
+      const res = await fetch(assetUrl, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+      if (res.ok) {
+        const blob = await res.blob();
+        if (blob.size > 0) {
+          const bmp = await createImageBitmap(blob);
+          ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 2, 2, AV - 4, AV - 4);
+          drew = true;
+        }
+      }
+    }
+  } catch { /* fall through to initials */ }
+  if (!drew) {
+    // initials fallback
+    const name: string = chat.title || "?";
+    const ini = name.split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
+    ctx.fillStyle = "#fff"; ctx.font = "bold 22px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(ini || "?", AV / 2, AV / 2);
+  }
+  // messenger icon top-right
+  try {
+    const plat = normalizePlatform(chat.accountID || chat.network || "");
+    drawMonoIcon(ctx, getPlatformIcon(plat), AV - 16, 0, 16);
+  } catch {}
+  // unread badge bottom-right
+  const n = chat.unreadCount || 0;
+  if (n > 0) {
+    const label = String(n);
+    const bw = 8 + label.length * 7;
+    ctx.fillStyle = "#000"; ctx.fillRect(AV - bw - 1, AV - 15, bw, 14);
+    ctx.strokeStyle = "#fff"; ctx.lineWidth = 1; ctx.strokeRect(AV - bw - 1, AV - 15, bw, 14);
+    ctx.fillStyle = "#fff"; ctx.font = "bold 10px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(label, AV - bw / 2 - 1, AV - 8);
+  }
+  const url = cv.toDataURL("image/png");
+  avatarCache.set(key, url);
+  return url;
+}
+
+// strip = 5 cells stacked (56x280); returns full grayscale bytes, sliced
+// into 3 image containers by the caller (144px per-container height limit).
+async function renderAvatarStrip(chats: any[], baseUrl: string | undefined): Promise<Uint8Array> {
+  const h = 5 * AV;
+  const cv = document.createElement("canvas");
+  cv.width = AV; cv.height = h;
+  const ctx = cv.getContext("2d")!;
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, AV, h);
+  for (let i = 0; i < chats.length; i++) {
+    const url = await composeAvatarCell(chats[i], baseUrl);
+    try {
+      const img = await loadImage(url);
+      ctx.drawImage(img, 0, i * AV);
+    } catch {}
+  }
+  const rgba = ctx.getImageData(0, 0, AV, h).data;
+  const gray = new Uint8Array(AV * h);
+  for (let i = 0, j = 0; i < rgba.length; i += 4, j++) {
+    gray[j] = (rgba[i] * 0.299 + rgba[i + 1] * 0.587 + rgba[i + 2] * 0.114) | 0;
+  }
+  return gray;
+}
+
+function loadImage(url: string): Promise<HTMLImageElement> {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => res(img);
+    img.onerror = rej;
+    img.src = url;
+  });
 }
 
 function clockText(): string {
@@ -3222,50 +3341,78 @@ export function GlassesUI({
 
   const renderChatsPage = useCallback(
     async (bridge: EvenAppBridge, snapshot: AppState, nav: GlassNavState) => {
-      // Page-based chat list with text containers (native list is fixed ~40px
-      // rows → only 7). 10 rows fit the 284px container without scrollbars.
-      // Selection moves only UPGRADE the names container (no page rebuild →
-      // no flash/jump); page flips upgrade names+preview+xy; only the first
-      // entry into the chats screen rebuilds the whole page.
-      const ROWS = 10;
+      // Layout B: 5 chats/page, each 2 lines (name + preview). Avatar strip
+      // (avatar + messenger glyph + unread badge) on the left, sliced into 3
+      // image containers (144px each). Selection marker is its own column so
+      // selecting only upgrades that one container (no rebuild, no jump).
+      const ROWS = 5;
       const total = snapshot.chats.length;
       const totalPages = Math.max(1, Math.ceil(total / ROWS));
       const page = Math.max(0, Math.min(Math.floor(nav.highlightedIndex / ROWS), totalPages - 1));
       const startIdx = page * ROWS;
       const pageChats = snapshot.chats.slice(startIdx, startIdx + ROWS);
 
-      const names = pageChats.map((c, i) => {
-        const sel = startIdx + i === nav.highlightedIndex;
-        return (sel ? "\u25B6" : " ") + truncatePx(c.title, 230);
-      });
+      const markers = pageChats.map((_, i) => (startIdx + i === nav.highlightedIndex ? "\u25B6" : " "));
+      const names = pageChats.map((c) => truncatePx(c.title, 210));
       const previews = pageChats.map((c) => {
         const raw = ((c as any).preview?.text || "") as string;
-        return truncatePx(raw.replace(/\n/g, " ").trim(), 240);
+        return truncatePx(raw.replace(/\n/g, " ").trim(), 190);
       });
-      const namesText = names.join("\n");
-      const previewText = previews.join("\n");
+      // 2 lines per chat: line1 = name, line2 = preview (blank-pad to 5 rows)
+      const nameCol: string[] = [];
+      const prevCol: string[] = [];
+      const markCol: string[] = [];
+      for (let i = 0; i < ROWS; i++) {
+        nameCol.push(i < names.length ? names[i] : "");
+        prevCol.push(i < previews.length ? previews[i] : "");
+        markCol.push(i < markers.length ? markers[i] : " ");
+      }
+      // names on odd lines, previews on even lines — two containers at the
+      // same x so they interleave without overlap (brightness can differ).
+      // names on odd lines (1,3,5..), previews on even lines (2,4,6..) — two
+      // containers at the same x interleave without overlap (brightness differs)
+      const namesText = nameCol.map((n) => `${n}\n`).join("\n");
+      const prevText = prevCol.map((pv) => `\n${pv}`).join("\n");
+      const markerText = markCol.map((m) => `${m}\n `).join("\n");
       const xyText = `${page + 1}/${totalPages}`;
 
       const pageSig = `${page}|${pageChats.map((c) => c.id).join(",")}`;
       const selSig = `${nav.highlightedIndex}`;
 
+      const pushAvatars = async () => {
+        try {
+          const gray = await renderAvatarStrip(pageChats, beeperConfig?.baseUrl);
+          // each cell is AV*AV bytes (56×56); slice by cell index
+          const slice = (fromCell: number, toCell: number) =>
+            Array.from(gray.subarray(fromCell * AV * AV, toCell * AV * AV));
+          // 3 containers: rows 0-1 (112px), 2-3 (112px), 4 (56px)
+          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 7, containerName: "av1", imageData: slice(0, 2) }));
+          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: "av2", imageData: slice(2, 4) }));
+          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "av3", imageData: slice(4, 5) }));
+        } catch (e) {
+          console.warn("[chats] avatars failed:", e);
+        }
+      };
+
       if (glassesLayoutRef.current !== "chats") {
-        // full page build (first entry into the chats screen)
         chatPageSigRef.current = pageSig;
         chatSelSigRef.current = selSig;
         chatPageRenderedAtRef.current = Date.now();
         const rb = await bridge.rebuildPageContainer(
           new RebuildPageContainer({
-            containerTotalNum: 6,
+            containerTotalNum: 9,
             textObject: [
-              new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: clockText(), textColor: 2, zOrderIndex: 1 }),
-              new TextContainerProperty({ containerID: 2, containerName: "spineframe", xPosition: 2, yPosition: 40, width: 52, height: 156, paddingLength: 0, borderWidth: 1, borderColor: 8, borderRadius: 0, content: " ", zOrderIndex: 2 }),
-              new TextContainerProperty({ containerID: 3, containerName: "xy", xPosition: 2, yPosition: 250, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 3 }),
-              new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 60, yPosition: 2, width: 256, height: 284, paddingLength: 2, borderWidth: 0, borderColor: 0, borderRadius: 0, content: namesText, isEventCapture: 1, zOrderIndex: 4 }),
-              new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 320, yPosition: 2, width: 254, height: 284, paddingLength: 2, borderWidth: 0, borderColor: 0, borderRadius: 0, content: previewText, textColor: 2, zOrderIndex: 5 }),
+              new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: clockText(), textColor: 2, zOrderIndex: 1 }),
+              new TextContainerProperty({ containerID: 2, containerName: "xy", xPosition: 2, yPosition: 250, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 2 }),
+              new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 118, yPosition: 2, width: 20, height: 284, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
+              new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 138, yPosition: 2, width: 436, height: 284, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: namesText, zOrderIndex: 4 }),
+              new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 138, yPosition: 2, width: 436, height: 284, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: prevText, textColor: 1, zOrderIndex: 5 }),
             ],
             imageObject: [
-              new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 6, yPosition: 46, width: 44, height: 144, zOrderIndex: 6 }),
+              new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 4, yPosition: 44, width: 48, height: 144, zOrderIndex: 6 }),
+              new ImageContainerProperty({ containerID: 7, containerName: "av1", xPosition: 60, yPosition: 2, width: 56, height: 112, zOrderIndex: 7 }),
+              new ImageContainerProperty({ containerID: 8, containerName: "av2", xPosition: 60, yPosition: 114, width: 56, height: 112, zOrderIndex: 8 }),
+              new ImageContainerProperty({ containerID: 9, containerName: "av3", xPosition: 60, yPosition: 226, width: 56, height: 56, zOrderIndex: 9 }),
             ],
             listObject: [],
           }),
@@ -3275,26 +3422,26 @@ export function GlassesUI({
         try {
           const bytes = await getSpineBytes();
           await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 6, containerName: "spine", imageData: bytes }));
-        } catch (e) {
-          console.warn("[chats] spine failed:", e);
-        }
+        } catch (e) { console.warn("[chats] spine failed:", e); }
+        await pushAvatars();
         return;
       }
 
       if (chatPageSigRef.current !== pageSig) {
-        // page flip: upgrade the three content containers (no rebuild flash)
         chatPageSigRef.current = pageSig;
         chatSelSigRef.current = selSig;
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 4, containerName: "names", content: namesText }));
-        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 5, containerName: "preview", content: previewText }));
-        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 3, containerName: "xy", content: xyText }));
+        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 5, containerName: "preview", content: prevText }));
+        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 3, containerName: "markers", content: markerText }));
+        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 2, containerName: "xy", content: xyText }));
+        await pushAvatars();
         return;
       }
 
       if (chatSelSigRef.current !== selSig) {
-        // selection moved within the page: only the names column changes
+        // selection moved within the page: ONLY the marker column upgrades
         chatSelSigRef.current = selSig;
-        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 4, containerName: "names", content: namesText }));
+        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 3, containerName: "markers", content: markerText }));
       }
     },
     [],

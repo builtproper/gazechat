@@ -6,7 +6,7 @@
  */
 
 // Normalize platform ID to standard form
-function normalizePlatform(platformId: string): string {
+export function normalizePlatform(platformId: string): string {
   const normalized = platformId.toLowerCase().trim();
   const mappings: Record<string, string> = {
     'whatsapp': 'whatsapp',
