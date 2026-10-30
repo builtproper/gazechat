@@ -69,7 +69,6 @@ const MESSAGE_MEDIA_IMAGE_X = Math.floor(
   (GLASSES_DISPLAY_WIDTH - MESSAGE_MEDIA_IMAGE_WIDTH) / 2,
 );
 const MESSAGE_MEDIA_IMAGE_Y = 0;
-const CHAT_TEXT_PREFIX = "    ";
 const ENABLE_CUSTOM_GLASSES_RENDERER = false;
 const STARTUP_DELAY_MS = 1200; // Brief delay so OS registers the startup render
 const DEFAULT_BEEPER_BASE_URL = "http://localhost:23373";
@@ -354,6 +353,46 @@ function truncateName(text: string, max: number): string {
   const result = `${first} ${second}`.trim();
 
   return result.slice(0, max);
+}
+
+// ── Pixel-accurate text metrics (G2 font is proportional) ──────────────────
+// Measured glyph widths (calibrated on real G2 firmware, KM app). Unknown
+// chars fall back to 11.7 (wide average) — safe overestimate for layout.
+import GLYPHS from "../glyphs.json";
+const RAW_GLYPHS: Record<string, number> = {};
+for (const [k, v] of Object.entries(GLYPHS)) if (typeof v === "number") RAW_GLYPHS[k] = v;
+const GLYPH_W: Record<string, number> = {
+  ...RAW_GLYPHS,
+  "1": 6.4, ":": 3.7, g: 10.7, r: 6.9, V: 12.8, K: 10.8, " ": 6.0,
+  "ä": 10.8, "ö": 9.8, "ü": 10.8, "ß": 9.8, "Ä": 12.8, "Ö": 11.7, "Ü": 11.7,
+  "|": 5.0, "▏": 20.0, "[": 6.5, "]": 6.5, "‹": 8.0, "›": 8.0, "…": 16.0,
+};
+const glyphW = (c: string) => GLYPH_W[c] ?? 11.7;
+const textPx = (t: string): number => [...t].reduce((s, c) => s + glyphW(c), 0);
+
+// Truncate to a pixel budget (adds '…' when cut).
+function truncatePx(text: string, maxPx: number): string {
+  if (textPx(text) <= maxPx) return text;
+  let out = "";
+  let w = 0;
+  const ell = glyphW("…");
+  for (const c of text) {
+    if (w + glyphW(c) + ell > maxPx) break;
+    out += c;
+    w += glyphW(c);
+  }
+  return out + "…";
+}
+
+// Pad with spaces so the string occupies at least targetPx (proportional-safe).
+function padPx(text: string, targetPx: number): string {
+  let out = text;
+  let w = textPx(out);
+  while (w < targetPx && out.length < 60) {
+    out += " ";
+    w += glyphW(" ");
+  }
+  return out;
 }
 
 // Convert ASCII to fullwidth for consistent rendering on G2 proportional font.
@@ -776,14 +815,17 @@ function buildChatsDisplay(
       const globalIdx = start + idx;
       const isSelected = globalIdx === highlightedIdx;
 
-      // Format: > Contact Name..............[!2]
-      const name = truncateName(chat.title, 24);
-      const namePadded = padRight(name, 24);
-      const suffix =
-        chat.unreadCount > 0 ? `${ICONS.UNREAD}${chat.unreadCount}]` : "";
-      const suffixPadded = padRight(suffix, 6);
-
-      const lineText = `${isSelected ? ICONS.SELECTED : " "} ${CHAT_TEXT_PREFIX}${namePadded}${suffixPadded}`;
+      // Format: > [12]  Contact name…   (unread badge FIRST, pixel-aligned)
+      const marker = `${isSelected ? ICONS.SELECTED : " "} `;
+      const badge =
+        chat.unreadCount > 0 ? `[${chat.unreadCount}]` : "";
+      // badge column: fixed pixel width so names always start at the same x
+      const BADGE_PX = 52; // fits [999] + gap; single digits get the 2-space gap via padding
+      const badgeCol = padPx(badge ? badge + " " : "", BADGE_PX);
+      // name gets everything left of the line (~548px usable in the 572px container)
+      const namePx = 548 - textPx(marker) - textPx(badgeCol);
+      const name = truncatePx(chat.title, namePx);
+      const lineText = `${marker}${badgeCol}${name}`;
       lines.push(line(lineText, isSelected ? "inverted" : "normal"));
     });
   }
