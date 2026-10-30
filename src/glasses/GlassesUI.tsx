@@ -620,28 +620,17 @@ function buildGlassesText(lines: DisplayLine[], fullwidth = true): string {
   return fullwidth ? toFullwidth(text) : text;
 }
 
-// ── spine image: rotated "GazeChat" wordmark (KM renderTextImage pattern) ──
-function renderSpineImage(text: string, w: number, h: number): Uint8Array {
-  const cv = document.createElement("canvas");
-  cv.width = w; cv.height = h;
-  const ctx = cv.getContext("2d")!;
-  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, w, h); ctx.fillStyle = "#fff";
-  ctx.textAlign = "center"; ctx.textBaseline = "middle";
-  ctx.translate(w / 2, h / 2); ctx.rotate(-Math.PI / 2);
-  const fitLen = h - 6;
-  let size = 40;
-  for (; size >= 8; size--) {
-    ctx.font = `bold ${size}px monospace`;
-    if (ctx.measureText(text).width <= fitLen) break;
-  }
-  ctx.font = `bold ${size}px monospace`;
-  ctx.fillText(text, 0, 0);
-  const rgba = ctx.getImageData(0, 0, w, h).data;
-  const gray = new Uint8Array(w * h);
-  for (let i = 0, j = 0; i < rgba.length; i += 4, j++) {
-    gray[j] = (rgba[i] * 0.299 + rgba[i + 1] * 0.587 + rgba[i + 2] * 0.114) | 0;
-  }
-  return gray;
+// ── spine image: "GazeChat" wordmark (user-provided art, pre-rotated to
+// 33×144 grayscale PNG, imported as data URL and shipped as raw bytes) ──────
+import SPINE_PNG from "../assets/gazechat-spine.png";
+let spineBytes: number[] | null = null;
+async function getSpineBytes(): Promise<number[]> {
+  if (spineBytes) return spineBytes;
+  const res = await fetch(SPINE_PNG);
+  const blob = await res.blob();
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  spineBytes = Array.from(buf);
+  return spineBytes;
 }
 
 function getMaxIndex(state: AppState): number {
@@ -3265,7 +3254,7 @@ export function GlassesUI({
             new ImageRawDataUpdate({
               containerID: BASE_PAGE_CONTAINER.CHAT_IMAGE_ID,
               containerName: "spine",
-              imageData: Array.from(renderSpineImage("GazeChat", 44, 144)),
+              imageData: await getSpineBytes(),
             }),
           );
         } catch (e) {
