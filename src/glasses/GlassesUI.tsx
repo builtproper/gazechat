@@ -35,6 +35,7 @@ import {
   ListContainerProperty,
   ListItemContainerProperty,
   RebuildPageContainer,
+  OsEventTypeList,
   TextContainerProperty,
   TextContainerUpgrade,
 } from "@evenrealities/even_hub_sdk";
@@ -622,6 +623,7 @@ function buildGlassesText(lines: DisplayLine[], fullwidth = true): string {
 // ── spine image: "GazeChat" wordmark (user-provided art, pre-rotated to
 // 33×144 grayscale PNG, imported as data URL and shipped as raw bytes) ──────
 import SPINE_PNG from "../assets/gazechat-spine.png";
+let chatProbeDone = false; // one-time API field probe (avatar/preview?)
 let spineBytes: number[] | null = null;
 async function getSpineBytes(): Promise<number[]> {
   if (spineBytes) return spineBytes;
@@ -630,6 +632,11 @@ async function getSpineBytes(): Promise<number[]> {
   const buf = new Uint8Array(await blob.arrayBuffer());
   spineBytes = Array.from(buf);
   return spineBytes;
+}
+
+function clockText(): string {
+  const d = new Date();
+  return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
 function getMaxIndex(state: AppState): number {
@@ -1414,6 +1421,9 @@ export function GlassesUI({
   const glassesTextRef = useRef<string>("");
   const glassesChatIconSignatureRef = useRef<string>("");
   const glassesChatIconsEnabledRef = useRef<boolean>(false);
+  const chatPageRef = useRef<number>(0); // current page of the chat list
+  const chatPageSigRef = useRef<string>("");
+  const chatListSelRef = useRef<number>(0); // firmware selection within page
   const isRenderingGlassesRef = useRef<boolean>(false);
   const pendingGlassesRenderRef = useRef<boolean>(false);
   const startupRenderCompleteRef = useRef<boolean>(false);
@@ -2694,6 +2704,19 @@ export function GlassesUI({
         accountId ? { accountIDs: [accountId] } : undefined,
       );
       const finalChats = result.chats;
+      // PROBE (one-time): log the real fields the live API returns, so we know
+      // whether avatars (participants[].imgURL) and last-message previews exist.
+      if (!chatProbeDone && finalChats.length > 0) {
+        chatProbeDone = true;
+        const c: any = finalChats[0];
+        console.log("[probe] chat keys:", Object.keys(c).join(","));
+        console.log("[probe] chat.imgURL:", c.imgURL ?? "NONE");
+        console.log("[probe] chat.network:", c.network ?? "NONE");
+        console.log("[probe] preview.text:", c.preview?.text ? JSON.stringify(c.preview.text).slice(0, 120) : "NONE");
+        const p: any = c.participants?.items?.[0];
+        console.log("[probe] participant keys:", p ? Object.keys(p).join(",") : "NONE");
+        console.log("[probe] imgURL:", p?.imgURL ?? "NONE");
+      }
       setState((s) => {
         const sameChats = areChatsEqual(s.chats, finalChats);
         const sameLoading = options?.silent ? true : s.isLoading === false;
@@ -3192,90 +3215,66 @@ export function GlassesUI({
   );
 
   const renderChatsPage = useCallback(
-    async (bridge: EvenAppBridge, snapshot: AppState, nav: GlassNavState) => {
-      const lines = buildChatsDisplay(snapshot, nav.highlightedIndex);
-      const text = buildGlassesText(lines, false);
+    async (bridge: EvenAppBridge, snapshot: AppState, _nav: GlassNavState) => {
+      // Page-based chat list: native name list (full brightness) + dimmed
+      // preview column, left strip = clock / framed spine / page X-Y.
+      const ROWS = 11;
+      const page = chatPageRef.current;
+      const startIdx = page * ROWS;
+      const pageChats = snapshot.chats.slice(startIdx, startIdx + ROWS);
+      const totalPages = Math.max(1, Math.ceil(snapshot.chats.length / ROWS));
 
-      if (glassesLayoutRef.current !== "chats") {
-        // Spine column (framed, rotated GazeChat wordmark) + full-height list
+      const names = pageChats.map((c) => truncatePx(c.title, 250));
+      const previews = pageChats.map((c) => {
+        const raw = (c as any).preview?.text || "";
+        return truncatePx(raw.replace(/\n/g, " ").trim(), 250);
+      });
+      const listSig = names.join("|");
+      const pageSig = `${page}/${totalPages}|${listSig}`;
+
+      if (glassesLayoutRef.current !== "chats" || chatPageSigRef.current !== pageSig) {
+        chatPageSigRef.current = pageSig;
         const rb = await bridge.rebuildPageContainer(
           new RebuildPageContainer({
-            containerTotalNum: 3,
+            containerTotalNum: 6,
             textObject: [
-              new TextContainerProperty({
-                containerID: BASE_PAGE_CONTAINER.OVERLAY_ID,
-                containerName: "spineframe",
-                xPosition: 2,
-                yPosition: 2,
-                width: 52,
-                height: 284,
-                borderWidth: 1,
-                borderColor: 8,
-                borderRadius: 0,
-                paddingLength: 0,
-                content: " ",
-                zOrderIndex: 1,
-              }),
-              new TextContainerProperty({
-                containerID: BASE_PAGE_CONTAINER.TEXT_ID,
-                containerName: "list",
-                xPosition: 60,
-                yPosition: 2,
-                width: 512,
-                height: 284,
-                borderWidth: 0,
-                borderColor: 0,
-                borderRadius: 0,
-                paddingLength: 2,
-                content: text,
-                isEventCapture: 1,
-                zOrderIndex: 3,
-              }),
+              new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 26, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: clockText(), textColor: 2, zOrderIndex: 1 }),
+              new TextContainerProperty({ containerID: 2, containerName: "spineframe", xPosition: 2, yPosition: 30, width: 52, height: 224, paddingLength: 0, borderWidth: 1, borderColor: 8, borderRadius: 0, content: " ", zOrderIndex: 2 }),
+              new TextContainerProperty({ containerID: 3, containerName: "xy", xPosition: 2, yPosition: 256, width: 52, height: 26, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: `${page + 1}/${totalPages}`, textColor: 2, zOrderIndex: 3 }),
+              new TextContainerProperty({ containerID: 4, containerName: "preview", xPosition: 322, yPosition: 2, width: 252, height: 284, paddingLength: 2, borderWidth: 0, borderColor: 0, borderRadius: 0, content: previews.join("\n"), textColor: 3, zOrderIndex: 4 }),
             ],
             imageObject: [
-              new ImageContainerProperty({
-                containerID: BASE_PAGE_CONTAINER.CHAT_IMAGE_ID,
-                containerName: "spine",
-                xPosition: 6,
-                yPosition: 72,
-                width: 44,
-                height: 144,
-                zOrderIndex: 2,
+              new ImageContainerProperty({ containerID: 5, containerName: "spine", xPosition: 6, yPosition: 70, width: 44, height: 144, zOrderIndex: 5 }),
+            ],
+            listObject: [
+              new ListContainerProperty({
+                containerID: 6, containerName: "names",
+                xPosition: 60, yPosition: 2, width: 260, height: 284,
+                borderWidth: 0, borderColor: 0, borderRadius: 0, paddingLength: 2,
+                zOrderIndex: 6, isEventCapture: 1,
+                itemContainer: new ListItemContainerProperty({
+                  itemCount: Math.max(1, names.length),
+                  itemWidth: 256,
+                  itemName: names.length ? names : [" "],
+                  isItemSelectBorderEn: 1,
+                }),
               }),
             ],
-            listObject: [],
           }),
         );
         glassesLayoutRef.current = "chats";
-        glassesTextRef.current = text;
-        console.log("[chats] rebuild:", rb ? "ok" : "FAILED");
+        glassesTextRef.current = listSig;
+        console.log("[chats] rebuild:", rb ? "ok" : "FAILED", "page", page + 1, "/", totalPages);
         try {
           const bytes = await getSpineBytes();
-          console.log("[chats] spine bytes:", bytes.length);
-          const imgOk = await bridge.updateImageRawData(
-            new ImageRawDataUpdate({
-              containerID: BASE_PAGE_CONTAINER.CHAT_IMAGE_ID,
-              containerName: "spine",
-              imageData: bytes,
-            }),
-          );
-          console.log("[chats] spine update:", JSON.stringify(imgOk));
+          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 5, containerName: "spine", imageData: bytes }));
         } catch (e) {
-          console.warn("[GlassesUI] spine image failed:", e);
+          console.warn("[chats] spine failed:", e);
         }
         return;
       }
 
-      if (glassesTextRef.current !== text) {
-        await bridge.textContainerUpgrade(
-          new TextContainerUpgrade({
-            containerID: BASE_PAGE_CONTAINER.TEXT_ID,
-            containerName: "list",
-            content: text,
-          }),
-        );
-        glassesTextRef.current = text;
-      }
+      // same page, selection moved: nothing to redraw (firmware highlights natively)
     },
     [],
   );
@@ -3376,6 +3375,41 @@ export function GlassesUI({
         unsubscribe = bridge.onEvenHubEvent((event: EvenHubEvent) => {
           if (nativeOverlayScreenRef.current) {
             return;
+          }
+
+          // Chat list paging: scrolling past the bottom/top of the native
+          // list flips to the next/previous page (user requirement).
+          if (
+            stateRef.current.currentScreen === "chats" &&
+            event.listEvent
+          ) {
+            const et = event.listEvent.eventType;
+            const idx = event.listEvent.currentSelectItemIndex ?? 0;
+            const ROWS = 11;
+            const total = stateRef.current.chats.length;
+            const totalPages = Math.max(1, Math.ceil(total / ROWS));
+            if (et === OsEventTypeList.SCROLL_BOTTOM_EVENT && chatPageRef.current < totalPages - 1) {
+              chatPageRef.current++;
+              chatListSelRef.current = 0;
+              chatPageSigRef.current = "";
+              void flushGlassesDisplay();
+              return;
+            }
+            if (et === OsEventTypeList.SCROLL_TOP_EVENT && chatPageRef.current > 0) {
+              chatPageRef.current--;
+              chatListSelRef.current = ROWS - 1;
+              chatPageSigRef.current = "";
+              void flushGlassesDisplay();
+              return;
+            }
+            if (et === OsEventTypeList.CLICK_EVENT || et === undefined) {
+              // selection click: open the chat at global index
+              const globalIdx = chatPageRef.current * ROWS + idx;
+              if (globalIdx < total) {
+                navRef.current = { ...navRef.current, highlightedIndex: globalIdx };
+                setNavVersion((v) => v + 1);
+              }
+            }
           }
 
           const action = mapGlassEvent(event);
