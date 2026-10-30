@@ -35,7 +35,6 @@ import {
   ListContainerProperty,
   ListItemContainerProperty,
   RebuildPageContainer,
-  OsEventTypeList,
   TextContainerProperty,
   TextContainerUpgrade,
 } from "@evenrealities/even_hub_sdk";
@@ -1421,10 +1420,8 @@ export function GlassesUI({
   const glassesTextRef = useRef<string>("");
   const glassesChatIconSignatureRef = useRef<string>("");
   const glassesChatIconsEnabledRef = useRef<boolean>(false);
-  const chatPageRef = useRef<number>(0); // current page of the chat list
   const chatPageSigRef = useRef<string>("");
-  const chatPageRenderedAtRef = useRef<number>(0); // timestamp of last list build (guards initial selection event)
-  const chatListSelRef = useRef<number>(0); // firmware selection within page
+  const chatPageRenderedAtRef = useRef<number>(0); // timestamp of last list build
   const isRenderingGlassesRef = useRef<boolean>(false);
   const pendingGlassesRenderRef = useRef<boolean>(false);
   const startupRenderCompleteRef = useRef<boolean>(false);
@@ -3223,67 +3220,56 @@ export function GlassesUI({
   );
 
   const renderChatsPage = useCallback(
-    async (bridge: EvenAppBridge, snapshot: AppState, _nav: GlassNavState) => {
-      // Page-based chat list: native name list (full brightness) + dimmed
-      // preview column, left strip = clock / framed spine / page X-Y.
+    async (bridge: EvenAppBridge, snapshot: AppState, nav: GlassNavState) => {
+      // Page-based chat list with text containers: the native list has a FIXED
+      // ~40px item height (measured on simulator 30.10.) → only 7 rows. Text
+      // containers use the firmware line height (~20px) → 11 rows fit, and the
+      // names + preview columns share the exact same pitch (no drift).
       const ROWS = 11;
-      const page = chatPageRef.current;
+      const total = snapshot.chats.length;
+      const totalPages = Math.max(1, Math.ceil(total / ROWS));
+      const page = Math.max(0, Math.min(Math.floor(nav.highlightedIndex / ROWS), totalPages - 1));
       const startIdx = page * ROWS;
       const pageChats = snapshot.chats.slice(startIdx, startIdx + ROWS);
-      const totalPages = Math.max(1, Math.ceil(snapshot.chats.length / ROWS));
 
-      const names = pageChats.map((c) => truncatePx(c.title, 250));
-      const previews = pageChats.map((c) => {
-        const raw = (c as any).preview?.text || "";
-        return truncatePx(raw.replace(/\n/g, " ").trim(), 250);
+      const names = pageChats.map((c, i) => {
+        const sel = startIdx + i === nav.highlightedIndex;
+        return (sel ? "\u25B6" : " ") + truncatePx(c.title, 230);
       });
-      const listSig = names.join("|");
-      const pageSig = `${page}/${totalPages}|${listSig}`;
+      const previews = pageChats.map((c) => {
+        const raw = ((c as any).preview?.text || "") as string;
+        return truncatePx(raw.replace(/\n/g, " ").trim(), 240);
+      });
 
-      if (glassesLayoutRef.current !== "chats" || chatPageSigRef.current !== pageSig) {
-        chatPageSigRef.current = pageSig;
-        chatPageRenderedAtRef.current = Date.now();
-        const rb = await bridge.rebuildPageContainer(
-          new RebuildPageContainer({
-            containerTotalNum: 6,
-            textObject: [
-              new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 26, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: clockText(), textColor: 2, zOrderIndex: 1 }),
-              new TextContainerProperty({ containerID: 2, containerName: "spineframe", xPosition: 2, yPosition: 30, width: 52, height: 224, paddingLength: 0, borderWidth: 1, borderColor: 8, borderRadius: 0, content: " ", zOrderIndex: 2 }),
-              new TextContainerProperty({ containerID: 3, containerName: "xy", xPosition: 2, yPosition: 256, width: 52, height: 26, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: `${page + 1}/${totalPages}`, textColor: 2, zOrderIndex: 3 }),
-              new TextContainerProperty({ containerID: 4, containerName: "preview", xPosition: 322, yPosition: 2, width: 252, height: 284, paddingLength: 2, borderWidth: 0, borderColor: 0, borderRadius: 0, content: previews.join("\n"), textColor: 3, zOrderIndex: 4 }),
-            ],
-            imageObject: [
-              new ImageContainerProperty({ containerID: 5, containerName: "spine", xPosition: 6, yPosition: 70, width: 44, height: 144, zOrderIndex: 5 }),
-            ],
-            listObject: [
-              new ListContainerProperty({
-                containerID: 6, containerName: "names",
-                xPosition: 60, yPosition: 2, width: 260, height: 284,
-                borderWidth: 0, borderColor: 0, borderRadius: 0, paddingLength: 2,
-                zOrderIndex: 6, isEventCapture: 1,
-                itemContainer: new ListItemContainerProperty({
-                  itemCount: Math.max(1, names.length),
-                  itemWidth: 256,
-                  itemName: names.length ? names : [" "],
-                  isItemSelectBorderEn: 1,
-                }),
-              }),
-            ],
-          }),
-        );
-        glassesLayoutRef.current = "chats";
-        glassesTextRef.current = listSig;
-        console.log("[chats] rebuild:", rb ? "ok" : "FAILED", "page", page + 1, "/", totalPages);
-        try {
-          const bytes = await getSpineBytes();
-          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 5, containerName: "spine", imageData: bytes }));
-        } catch (e) {
-          console.warn("[chats] spine failed:", e);
-        }
-        return;
+      const sig = `${page}|${nav.highlightedIndex}|${names.join("|")}`;
+      if (glassesLayoutRef.current === "chats" && chatPageSigRef.current === sig) return;
+      chatPageSigRef.current = sig;
+      chatPageRenderedAtRef.current = Date.now();
+
+      const rb = await bridge.rebuildPageContainer(
+        new RebuildPageContainer({
+          containerTotalNum: 6,
+          textObject: [
+            new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: clockText(), textColor: 2, zOrderIndex: 1 }),
+            new TextContainerProperty({ containerID: 2, containerName: "spineframe", xPosition: 2, yPosition: 40, width: 52, height: 156, paddingLength: 0, borderWidth: 1, borderColor: 8, borderRadius: 0, content: " ", zOrderIndex: 2 }),
+            new TextContainerProperty({ containerID: 3, containerName: "xy", xPosition: 2, yPosition: 250, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderColor: 0, borderRadius: 0, content: `${page + 1}/${totalPages}`, textColor: 2, zOrderIndex: 3 }),
+            new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 60, yPosition: 2, width: 256, height: 284, paddingLength: 2, borderWidth: 0, borderColor: 0, borderRadius: 0, content: names.join("\n"), isEventCapture: 1, zOrderIndex: 4 }),
+            new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 320, yPosition: 2, width: 254, height: 284, paddingLength: 2, borderWidth: 0, borderColor: 0, borderRadius: 0, content: previews.join("\n"), textColor: 3, zOrderIndex: 5 }),
+          ],
+          imageObject: [
+            new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 6, yPosition: 46, width: 44, height: 144, zOrderIndex: 6 }),
+          ],
+          listObject: [],
+        }),
+      );
+      glassesLayoutRef.current = "chats";
+      console.log("[chats] rebuild:", rb ? "ok" : "FAILED", "page", page + 1, "/", totalPages);
+      try {
+        const bytes = await getSpineBytes();
+        await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 6, containerName: "spine", imageData: bytes }));
+      } catch (e) {
+        console.warn("[chats] spine failed:", e);
       }
-
-      // same page, selection moved: nothing to redraw (firmware highlights natively)
     },
     [],
   );
@@ -3384,48 +3370,6 @@ export function GlassesUI({
         unsubscribe = bridge.onEvenHubEvent((event: EvenHubEvent) => {
           if (nativeOverlayScreenRef.current) {
             return;
-          }
-
-          // Chat list paging: scrolling past the bottom/top of the native
-          // list flips to the next/previous page (user requirement).
-          if (
-            stateRef.current.currentScreen === "chats" &&
-            event.listEvent
-          ) {
-            const et = event.listEvent.eventType;
-            const idx = event.listEvent.currentSelectItemIndex ?? 0;
-            const ROWS = 11;
-            const total = stateRef.current.chats.length;
-            const totalPages = Math.max(1, Math.ceil(total / ROWS));
-            if (et === OsEventTypeList.SCROLL_BOTTOM_EVENT && chatPageRef.current < totalPages - 1) {
-              chatPageRef.current++;
-              chatListSelRef.current = 0;
-              chatPageSigRef.current = "";
-              void flushGlassesDisplay();
-              return;
-            }
-            if (et === OsEventTypeList.SCROLL_TOP_EVENT && chatPageRef.current > 0) {
-              chatPageRef.current--;
-              chatListSelRef.current = ROWS - 1;
-              chatPageSigRef.current = "";
-              void flushGlassesDisplay();
-              return;
-            }
-            if (et === OsEventTypeList.CLICK_EVENT || et === undefined) {
-              // Guard: the firmware fires an initial selection event right
-              // after the list is built — never treat that as a tap.
-              if (Date.now() - chatPageRenderedAtRef.current < 600) return;
-              const globalIdx = chatPageRef.current * ROWS + idx;
-              if (globalIdx < total) {
-                navRef.current = { ...navRef.current, highlightedIndex: globalIdx };
-                setState((s) => {
-                  const updates = handleSelectRef.current(s, globalIdx);
-                  return { ...s, ...updates };
-                });
-              }
-              return; // never fall through to mapGlassEvent (double-open)
-            }
-            return; // any other list event on the chats screen: consume
           }
 
           const action = mapGlassEvent(event);
