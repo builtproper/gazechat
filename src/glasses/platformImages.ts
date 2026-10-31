@@ -31,7 +31,11 @@ export function normalizePlatform(platformId: string): string {
     'facebook': 'messenger',
     'ig': 'instagram',
   };
-  return mappings[normalized] || 'other';
+  // Beeper accountIDs look like "whatsapp.491766..." or "telegram.123" —
+  // match the prefix, not just the bare name.
+  if (mappings[normalized]) return mappings[normalized];
+  const prefix = normalized.split(/[.:/]/)[0];
+  return mappings[prefix] || 'other';
 }
 
 // ═══════════════════════════════════════════════════════════════

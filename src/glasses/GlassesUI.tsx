@@ -487,6 +487,13 @@ function buildBeeperAssetUrl(baseUrl: string, assetUrl: string): string {
     return `${normalizeBeeperBaseUrl(baseUrl)}/v1/assets/serve?url=${encodeURIComponent(assetUrl)}`;
   }
 
+  // Beeper stores avatars as local file paths (file:///... or C:\...). The
+  // HTTP API serves them through the same asset route; the reverse proxy
+  // whitelists /v1/assets/serve for images.
+  if (/^(file:\/\/|[a-zA-Z]:[\\/])/i.test(assetUrl)) {
+    return `${normalizeBeeperBaseUrl(baseUrl)}/v1/assets/serve?url=${encodeURIComponent(assetUrl)}`;
+  }
+
   return assetUrl;
 }
 
