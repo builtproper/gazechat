@@ -879,7 +879,6 @@ function clockText(): string {
 
 // ── message view layout (dynamic containers, max 3 messages/page) ─────────
 const MSG_LINE_H = 28;
-const MSG_PAD = 5; // vertical reserve so the firmware never shows a scrollbar
 const MSG_AREA_Y = 40;
 const MSG_NORMAL_MAX_LINES = 7; // 7×28 + pads + gaps = 223 ≤ 248
 const MSG_FOCUS_MAX_LINES = 8;
@@ -3578,15 +3577,17 @@ export function GlassesUI({
         const timeTxt = it.blocks > 1
           ? `${formatTime(it.msg.timestamp)}\n${it.block + 1}/${it.blocks}`
           : formatTime(it.msg.timestamp);
-        const bh = layout.focus ? 248 : it.lines.length * MSG_LINE_H + MSG_PAD;
-        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, timeY: 0, timeH: 2 * MSG_LINE_H + MSG_PAD, bx: g.bubbleX, bw: g.bubbleW, tx: g.timeX, show: true };
+        const bh = layout.focus ? 248 : it.lines.length * 29 + 6;
+        // time content: 1 line normally, 2 lines when a block counter follows
+        const th = it.blocks > 1 ? 64 : 35;
+        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, timeY: 0, timeH: th, bx: g.bubbleX, bw: g.bubbleW, tx: g.timeX, show: true };
       });
       // stack slots top-down; time vertically centered beside its bubble
       let y = MSG_AREA_Y;
       for (const s of slots) {
         if (!s.show) continue;
         s.y = y;
-        s.timeY = y + Math.round((s.h - s.timeH) / 2);
+        s.timeY = y + Math.max(0, Math.round((s.h - s.timeH) / 2));
         y += s.h + MSG_GAP;
       }
       // positions/sizes cannot be upgraded — only content. Rebuild whenever the
