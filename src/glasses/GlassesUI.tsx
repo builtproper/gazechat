@@ -877,6 +877,74 @@ function clockText(): string {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
+// ── message view layout (dynamic containers, max 3 messages/page) ─────────
+const MSG_LINE_H = 28;
+const MSG_AREA_Y = 40;
+const MSG_NORMAL_MAX_LINES = 7; // 3 bubbles + pads + gaps must fit MSG_AREA_H
+const MSG_FOCUS_MAX_LINES = 8;
+const MSG_BUBBLE_X = 60;
+const MSG_BUBBLE_W = 452;
+const MSG_TIME_X = 516;
+const MSG_TIME_W = 58;
+
+function wrapToPx(text: string, maxPx: number): string[] {
+  const out: string[] = [];
+  for (const para of text.split("\n")) {
+    let cur = "";
+    for (const word of para.split(/\s+/)) {
+      if (!word) continue;
+      const test = cur ? cur + " " + word : word;
+      if (textPx(test) <= maxPx) cur = test;
+      else {
+        if (cur) out.push(cur);
+        cur = word;
+      }
+    }
+    out.push(cur || "");
+  }
+  return out.length ? out : [""];
+}
+
+function msgBubbleText(msg: BeeperMessage, all: BeeperMessage[]): string {
+  let t = stripUnsupportedChars(formatMessageText(msg)).replace(/\r/g, "").trim();
+  if (!t || t === "[media]") {
+    const ty = (msg.type || "").toUpperCase();
+    t = ty === "IMAGE" ? "[Photo]" : ty === "VIDEO" ? "[Video]" : ty === "AUDIO" ? "[Audio]" : ty === "VOICE" ? "[Voice]" : ty === "FILE" ? "[File]" : "[media]";
+  }
+  if (msg.linkedMessageID) {
+    const linked = all.find((m) => m.id === msg.linkedMessageID);
+    if (linked) {
+      const lt = stripUnsupportedChars(formatMessageText(linked)).replace(/\n/g, " ").trim();
+      if (lt) t = "Answer to: " + truncatePx(lt, MSG_BUBBLE_W - 130) + "\n" + t;
+    }
+  }
+  return t;
+}
+
+interface MsgItem { msg: BeeperMessage; lines: string[]; block: number; blocks: number }
+function computeMsgLayout(
+  messages: BeeperMessage[],
+  selIdx: number,
+  block: number,
+): { focus: boolean; items: MsgItem[] } {
+  if (messages.length === 0) {
+    return { focus: false, items: [{ msg: {} as BeeperMessage, lines: ["No messages yet - send one!"], block: 0, blocks: 1 }] };
+  }
+  const sel = Math.max(0, Math.min(selIdx, messages.length - 1));
+  const start = Math.max(0, sel - 2);
+  const win = messages.slice(start, sel + 1);
+  const wrapped = win.map((m) => wrapToPx(msgBubbleText(m, messages), MSG_BUBBLE_W - 14));
+  const total = wrapped.reduce((s, w) => s + w.length, 0);
+  if (total <= MSG_NORMAL_MAX_LINES) {
+    return { focus: false, items: win.map((m, i) => ({ msg: m, lines: wrapped[i], block: 0, blocks: 1 })) };
+  }
+  // focus mode: the selected message alone, paginated into blocks
+  const lines = wrapToPx(msgBubbleText(messages[sel], messages), MSG_BUBBLE_W - 14);
+  const blocks = Math.max(1, Math.ceil(lines.length / MSG_FOCUS_MAX_LINES));
+  const b = Math.max(0, Math.min(block, blocks - 1));
+  return { focus: true, items: [{ msg: messages[sel], lines: lines.slice(b * MSG_FOCUS_MAX_LINES, (b + 1) * MSG_FOCUS_MAX_LINES), block: b, blocks }] };
+}
+
 function getMaxIndex(state: AppState, chatFilter: "normal" | "low" | "archived" = "normal"): number {
   switch (state.currentScreen) {
     case "startup":
@@ -1655,13 +1723,15 @@ export function GlassesUI({
   const previousScreenRef = useRef<Screen>(state.currentScreen);
   const glassesBridgeRef = useRef<EvenAppBridge | null>(null);
   const glassesInitializedRef = useRef<boolean>(false);
-  const glassesLayoutRef = useRef<"text" | "chats" | null>(null);
+  const glassesLayoutRef = useRef<"text" | "chats" | "messages" | null>(null);
   const glassesTextRef = useRef<string>("");
   const glassesChatIconSignatureRef = useRef<string>("");
   const glassesChatIconsEnabledRef = useRef<boolean>(false);
   const beeperBaseRef = useRef<string | undefined>(beeperConfig?.baseUrl);
   beeperBaseRef.current = beeperConfig?.baseUrl;
   const chatFilterRef = useRef<"normal" | "low" | "archived">("normal");
+  const msgBlockRef = useRef<number>(0);
+  const msgSigRef = useRef<string>("");
   const chatPageSigRef = useRef<string>("");
   const chatSelSigRef = useRef<string>("");
   const chatPageRenderedAtRef = useRef<number>(0); // timestamp of last list build
@@ -2796,6 +2866,8 @@ export function GlassesUI({
             updates.selectedChat = chat.id;
             updates.isLoading = true;
             updates.selectedMessageIndex = 0;
+            msgBlockRef.current = 0;
+            glassesLayoutRef.current = null; // force messages rebuild
             // messageScrollOffset will be set to max (bottom) in loadMessages
 
             void loadMessages(chat.id);
@@ -2886,6 +2958,7 @@ export function GlassesUI({
           updates.currentScreen = "chats";
           updates.selectedChat = null;
           updates.messageScrollOffset = 0; // Reset scroll for next visit
+          msgBlockRef.current = 0;
           break;
         case "messageDetail":
           updates.currentScreen = "messages";
@@ -3232,24 +3305,29 @@ export function GlassesUI({
             return nav;
           }
 
-          // Messages screen uses messageScrollOffset for cursor position
+          // Messages screen: scroll pages blocks of a long focused message
+          // first, then moves to the next/previous message.
           if (snapshot.currentScreen === "messages") {
             const messages = snapshot.messages;
             if (messages.length === 0) return nav;
-
-            const currentScroll = snapshot.messageScrollOffset;
-            const maxScroll = Math.max(0, messages.length - 1);
-
-            if (action.direction === "down" && currentScroll >= maxScroll) {
-              return nav;
+            const sel = Math.min(snapshot.messageScrollOffset, messages.length - 1);
+            const layout = computeMsgLayout(messages, sel, msgBlockRef.current);
+            if (layout.focus) {
+              const it = layout.items[0];
+              if (action.direction === "down") {
+                if (it.block + 1 < it.blocks) msgBlockRef.current = it.block + 1;
+                else if (sel < messages.length - 1) { msgBlockRef.current = 0; setState((s) => ({ ...s, messageScrollOffset: sel + 1 })); }
+              } else {
+                if (it.block > 0) msgBlockRef.current = it.block - 1;
+                else if (sel > 0) { msgBlockRef.current = 0; setState((s) => ({ ...s, messageScrollOffset: sel - 1 })); }
+              }
+            } else {
+              const newSel = action.direction === "down"
+                ? Math.min(sel + 1, messages.length - 1)
+                : Math.max(sel - 1, 0);
+              msgBlockRef.current = 0;
+              if (newSel !== sel) setState((s) => ({ ...s, messageScrollOffset: newSel }));
             }
-            if (action.direction === "up" && currentScroll <= 0) {
-              return nav;
-            }
-
-            const newScroll =
-              currentScroll + (action.direction === "down" ? 1 : -1);
-            setState((s) => ({ ...s, messageScrollOffset: newScroll }));
             return nav;
           }
 
@@ -3468,7 +3546,7 @@ export function GlassesUI({
   useEffect(() => {
     const id = window.setInterval(() => {
       const t = clockText();
-      if (t !== clockRef.current && glassesLayoutRef.current === "chats") {
+      if (t !== clockRef.current && (glassesLayoutRef.current === "chats" || glassesLayoutRef.current === "messages")) {
         clockRef.current = t;
         void getBridge().then((b) =>
           b?.textContainerUpgrade(new TextContainerUpgrade({ containerID: 1, containerName: "clock", content: t })),
@@ -3477,6 +3555,83 @@ export function GlassesUI({
     }, 15000);
     return () => clearInterval(id);
   }, []);
+
+  const renderMessagesPage = useCallback(
+    async (bridge: EvenAppBridge, snapshot: AppState, _nav: GlassNavState) => {
+      const chat = snapshot.chats.find((c) => c.id === snapshot.selectedChat);
+      const chatName = chat ? truncatePx(chat.title, 380) : "Messages";
+      const selIdx = Math.min(snapshot.messageScrollOffset, Math.max(0, snapshot.messages.length - 1));
+      const layout = computeMsgLayout(snapshot.messages, selIdx, msgBlockRef.current);
+      const items = layout.items;
+
+      // build the three bubble/time slots (top→bottom)
+      const slots = [0, 1, 2].map((i) => {
+        const it = items[i];
+        if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y, h: MSG_LINE_H, show: false };
+        const h = it.lines.length * MSG_LINE_H;
+        const timeTxt = it.blocks > 1
+          ? `${formatTime(it.msg.timestamp)}\n${it.block + 1}/${it.blocks}`
+          : formatTime(it.msg.timestamp);
+        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h, show: true };
+      });
+      // stack visible bubbles with 6px gaps, top-aligned
+      let y = MSG_AREA_Y;
+      for (const s of slots) {
+        if (!s.show) continue;
+        s.y = y;
+        y += s.h + 6;
+      }
+      // positions/sizes cannot be upgraded — only content. Rebuild whenever the
+      // shape (which slots are visible, their y/h) changes; upgrade otherwise.
+      const shape = slots.map((s) => (s.show ? `${s.y}:${s.h}` : "x")).join(",");
+      const contentSig = `${slots.map((s) => s.bubble).join("|")}#${slots.map((s) => s.time).join("|")}#${chatName}`;
+      if (glassesLayoutRef.current === "messages" && msgSigRef.current === shape + "#" + contentSig) return;
+      const needRebuild = glassesLayoutRef.current !== "messages" || msgSigRef.current.split("#")[0] !== shape;
+      msgSigRef.current = shape + "#" + contentSig;
+
+      const mk = (id: number, name: string, x: number, w: number, sy: number, sh: number, content: string, border: number, bright?: number) =>
+        new TextContainerProperty({ containerID: id, containerName: name, xPosition: x, yPosition: sy, width: w, height: sh, paddingLength: 2, borderWidth: border, borderColor: border ? 5 : 0, borderRadius: border ? 8 : 0, content, textColor: bright, zOrderIndex: id });
+
+      const textObject = [
+        mk(1, "clock", 2, 54, 2, 34, clockText(), 0),
+        mk(2, "chatname", 60, 452, 2, 34, chatName, 0),
+        mk(3, "bub0", MSG_BUBBLE_X, MSG_BUBBLE_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
+        mk(4, "time0", MSG_TIME_X, MSG_TIME_W, slots[0].y, slots[0].h, slots[0].time, 0, 2),
+        mk(5, "bub1", MSG_BUBBLE_X, MSG_BUBBLE_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
+        mk(6, "time1", MSG_TIME_X, MSG_TIME_W, slots[1].y, slots[1].h, slots[1].time, 0, 2),
+        mk(7, "bub2", MSG_BUBBLE_X, MSG_BUBBLE_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
+        mk(8, "time2", MSG_TIME_X, MSG_TIME_W, slots[2].y, slots[2].h, slots[2].time, 0, 2),
+      ];
+
+      if (needRebuild) {
+        const rb = await bridge.rebuildPageContainer(new RebuildPageContainer({
+          containerTotalNum: 9,
+          textObject,
+          imageObject: [new ImageContainerProperty({ containerID: 9, containerName: "spine", xPosition: 2, yPosition: 40, width: 54, height: 144, zOrderIndex: 9 })],
+          listObject: [],
+        }));
+        glassesLayoutRef.current = "messages";
+        console.log("[msg] rebuild:", rb ? "ok" : "FAILED", "items", items.length, "focus", layout.focus);
+        try {
+          const bytes = await getSpineBytes();
+          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "spine", imageData: bytes }));
+        } catch (e) { console.warn("[msg] spine failed:", e); }
+        return;
+      }
+      // same layout shape: upgrade only the containers that changed
+      const upgrades = [
+        [1, "clock", textObject[0].content],
+        [2, "chatname", textObject[1].content],
+        [3, "bub0", textObject[2].content], [4, "time0", textObject[3].content],
+        [5, "bub1", textObject[4].content], [6, "time1", textObject[5].content],
+        [7, "bub2", textObject[6].content], [8, "time2", textObject[7].content],
+      ] as const;
+      for (const [id, name, content] of upgrades) {
+        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: name, content }));
+      }
+    },
+    [],
+  );
 
   const renderChatsPage = useCallback(
     async (bridge: EvenAppBridge, snapshot: AppState, nav: GlassNavState) => {
@@ -3645,6 +3800,8 @@ export function GlassesUI({
 
       if (snapshot.currentScreen === "chats") {
         await renderChatsPage(bridge, snapshot, nav);
+      } else if (snapshot.currentScreen === "messages" && !snapshot.isLoading) {
+        await renderMessagesPage(bridge, snapshot, nav);
       } else {
         const lines = getDisplayLines(snapshot, nav);
         // fullwidth blocky conversion only on message screens; startup/loading
