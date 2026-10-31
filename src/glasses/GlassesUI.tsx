@@ -881,7 +881,7 @@ function clockText(): string {
 const MSG_LINE_H = 28;
 const MSG_PAD = 5; // vertical reserve so the firmware never shows a scrollbar
 const MSG_AREA_Y = 40;
-const MSG_NORMAL_MAX_LINES = 6; // 3 bubbles must fit with pads + gaps
+const MSG_NORMAL_MAX_LINES = 7; // 7×28 + pads + gaps = 223 ≤ 248
 const MSG_FOCUS_MAX_LINES = 8;
 const MSG_TIME_W = 56;
 const MSG_GAP = 6;
@@ -940,6 +940,8 @@ function computeMsgLayout(
   const win = messages.slice(start, sel + 1);
   const wrapped = win.map((m) => wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14));
   const total = wrapped.reduce((s, w) => s + w.length, 0);
+  // normal mode if all three bubbles fit the area together (with reserve);
+  // otherwise the selected message takes the full area and paginates
   if (total <= MSG_NORMAL_MAX_LINES) {
     return { focus: false, items: win.map((m, i) => ({ msg: m, lines: wrapped[i], block: 0, blocks: 1 })) };
   }
@@ -3318,19 +3320,15 @@ export function GlassesUI({
             if (messages.length === 0) return nav;
             const sel = Math.min(snapshot.messageScrollOffset, messages.length - 1);
             const layout = computeMsgLayout(messages, sel, msgBlockRef.current);
+            const down = action.direction === "down";
             if (layout.focus) {
               const it = layout.items[0];
-              if (action.direction === "down") {
-                if (it.block + 1 < it.blocks) msgBlockRef.current = it.block + 1;
-                else if (sel < messages.length - 1) { msgBlockRef.current = 0; setState((s) => ({ ...s, messageScrollOffset: sel + 1 })); }
-              } else {
-                if (it.block > 0) msgBlockRef.current = it.block - 1;
-                else if (sel > 0) { msgBlockRef.current = 0; setState((s) => ({ ...s, messageScrollOffset: sel - 1 })); }
-              }
+              if (down && it.block + 1 < it.blocks) msgBlockRef.current = it.block + 1;
+              else if (!down && it.block > 0) msgBlockRef.current = it.block - 1;
+              else if (down && sel < messages.length - 1) { msgBlockRef.current = 0; setState((s) => ({ ...s, messageScrollOffset: sel + 1 })); }
+              else if (!down && sel > 0) { msgBlockRef.current = 0; setState((s) => ({ ...s, messageScrollOffset: sel - 1 })); }
             } else {
-              const newSel = action.direction === "down"
-                ? Math.min(sel + 1, messages.length - 1)
-                : Math.max(sel - 1, 0);
+              const newSel = down ? Math.min(sel + 1, messages.length - 1) : Math.max(sel - 1, 0);
               msgBlockRef.current = 0;
               if (newSel !== sel) setState((s) => ({ ...s, messageScrollOffset: newSel }));
             }
@@ -3577,13 +3575,13 @@ export function GlassesUI({
         const it = items[i];
         if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y, h: MSG_LINE_H, timeY: MSG_AREA_Y, timeH: MSG_LINE_H, bx: 60, bw: 400, tx: 516, show: false };
         const g = msgGeom(it.msg.isSender);
-        const h = it.lines.length * MSG_LINE_H + MSG_PAD;
         const timeTxt = it.blocks > 1
           ? `${formatTime(it.msg.timestamp)}\n${it.block + 1}/${it.blocks}`
           : formatTime(it.msg.timestamp);
-        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h, timeY: 0, timeH: Math.max(2 * MSG_LINE_H + MSG_PAD, h), bx: g.bubbleX, bw: g.bubbleW, tx: g.timeX, show: true };
+        const bh = layout.focus ? 248 : it.lines.length * MSG_LINE_H + MSG_PAD;
+        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, timeY: 0, timeH: 2 * MSG_LINE_H + MSG_PAD, bx: g.bubbleX, bw: g.bubbleW, tx: g.timeX, show: true };
       });
-      // stack visible bubbles with gaps, top-aligned; center time beside bubble
+      // stack slots top-down; time vertically centered beside its bubble
       let y = MSG_AREA_Y;
       for (const s of slots) {
         if (!s.show) continue;
@@ -3593,7 +3591,7 @@ export function GlassesUI({
       }
       // positions/sizes cannot be upgraded — only content. Rebuild whenever the
       // shape (which slots are visible, their y/h) changes; upgrade otherwise.
-      const shape = slots.map((s) => (s.show ? `${s.y}:${s.h}:${s.timeY}:${s.bx}:${s.tx}` : "x")).join(",");
+      const shape = slots.map((s) => (s.show ? `${s.y}:${s.h}:${s.bx}:${s.tx}:${s.timeY}` : "x")).join(",");
       const contentSig = `${slots.map((s) => s.bubble).join("|")}#${slots.map((s) => s.time).join("|")}#${chatName}`;
       if (glassesLayoutRef.current === "messages" && msgSigRef.current === shape + "#" + contentSig) return;
       const needRebuild = glassesLayoutRef.current !== "messages" || msgSigRef.current.split("#")[0] !== shape;
