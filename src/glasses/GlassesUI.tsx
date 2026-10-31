@@ -2558,7 +2558,7 @@ export function GlassesUI({
     };
 
     pollChats();
-    chatsPollIntervalRef.current = setInterval(pollChats, 2000);
+    chatsPollIntervalRef.current = setInterval(pollChats, 5000);
 
     return () => {
       if (chatsPollIntervalRef.current) {
@@ -3440,6 +3440,21 @@ export function GlassesUI({
     [],
   );
 
+  // clock: refresh once a minute, upgrade only when the digits changed
+  const clockRef = useRef<string>("");
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      const t = clockText();
+      if (t !== clockRef.current && glassesLayoutRef.current === "chats") {
+        clockRef.current = t;
+        void getBridge().then((b) =>
+          b?.textContainerUpgrade(new TextContainerUpgrade({ containerID: 1, containerName: "clock", content: t })),
+        );
+      }
+    }, 15000);
+    return () => clearInterval(id);
+  }, []);
+
   const renderChatsPage = useCallback(
     async (bridge: EvenAppBridge, snapshot: AppState, nav: GlassNavState) => {
       // Layout B: 5 chats/page, each 2 lines (name + preview). Avatar strip
@@ -3479,7 +3494,9 @@ export function GlassesUI({
       // 9 lines (drop the trailing blank) so the 274px marker container never
       // overflows — overflow made the firmware scroll-jump on every upgrade
       const markerText = markCol.map((m) => `${m}\n `).join("\n").replace(/\n $/, "");
-      const xyText = `${page + 1}/${totalPages}`;
+      const xyRaw = `${page + 1}/${totalPages}`;
+      const xyPad = Math.max(0, Math.floor((54 - textPx(xyRaw)) / 2));
+      const xyText = " ".repeat(xyPad) + xyRaw;
 
       const pageSig = `${page}|${pageChats.map((c) => c.id).join(",")}`;
       const selSig = `${nav.highlightedIndex}`;
@@ -3512,7 +3529,7 @@ export function GlassesUI({
               new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: prevText, textColor: 1, zOrderIndex: 5 }),
             ],
             imageObject: [
-              new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 4, yPosition: 44, width: 48, height: 144, zOrderIndex: 6 }),
+              new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 2, yPosition: 40, width: 54, height: 144, zOrderIndex: 6 }),
               new ImageContainerProperty({ containerID: 7, containerName: "av1", xPosition: 78, yPosition: 2, width: 56, height: 108, zOrderIndex: 7 }),
               new ImageContainerProperty({ containerID: 8, containerName: "av2", xPosition: 78, yPosition: 110, width: 56, height: 108, zOrderIndex: 8 }),
               new ImageContainerProperty({ containerID: 9, containerName: "av3", xPosition: 78, yPosition: 218, width: 56, height: 54, zOrderIndex: 9 }),
