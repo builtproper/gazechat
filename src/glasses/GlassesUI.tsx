@@ -865,8 +865,8 @@ function filterChats(chats: any[], filter: "normal" | "low" | "archived"): any[]
 }
 
 function filterLabel(filter: "normal" | "low" | "archived"): string {
-  if (filter === "low") return "Low-\nPriority";
-  if (filter === "archived") return "Archived";
+  if (filter === "low") return "Low\nprio";
+  if (filter === "archived") return "Arch.";
   return "";
 }
 
@@ -3512,11 +3512,14 @@ export function GlassesUI({
       // same x so they interleave without overlap (brightness can differ).
       // names on odd lines (1,3,5..), previews on even lines (2,4,6..) — two
       // containers at the same x interleave without overlap (brightness differs)
-      const namesText = nameCol.map((n) => `${n}\n`).join("\n").replace(/\n+$/, "");
-      const prevText = prevCol.map((pv) => `\n${pv}`).join("\n");
+      const empty = total === 0;
+      const namesText = empty
+        ? "No chats"
+        : nameCol.map((n) => `${n}\n`).join("\n").replace(/\n+$/, "");
+      const prevText = empty ? " " : prevCol.map((pv) => `\n${pv}`).join("\n");
       // 9 lines (drop the trailing blank) so the 274px marker container never
       // overflows — overflow made the firmware scroll-jump on every upgrade
-      const markerText = markCol.map((m) => `${m}\n `).join("\n").replace(/\n $/, "");
+      const markerText = empty ? " " : markCol.map((m) => `${m}\n `).join("\n").replace(/\n $/, "");
       const labelText = filterLabel(filter);
       const xyRaw = `${page + 1}/${totalPages}`;
       // center with leading spaces: (54px column - text) / 2 / 6px per space
