@@ -3518,9 +3518,10 @@ export function GlassesUI({
       // overflows — overflow made the firmware scroll-jump on every upgrade
       const markerText = markCol.map((m) => `${m}\n `).join("\n").replace(/\n $/, "");
       const labelText = filterLabel(filter);
-      const xyText = `${page + 1}/${totalPages}`;
-      const xyW = Math.max(24, Math.ceil(textPx(xyText)) + 6);
-      const xyX = Math.max(2, Math.round(2 + (54 - xyW) / 2));
+      const xyRaw = `${page + 1}/${totalPages}`;
+      // center with leading spaces: (54px column - text) / 2 / 6px per space
+      const xyPad = Math.max(0, Math.round((54 - textPx(xyRaw)) / 12));
+      const xyText = " ".repeat(xyPad) + xyRaw;
 
       const pageSig = `${filter}|${page}|${pageChats.map((c) => c.id).join(",")}`;
       const selSig = `${nav.highlightedIndex}`;
@@ -3554,7 +3555,7 @@ export function GlassesUI({
             }),
             textObject: [
               new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: clockText(), zOrderIndex: 1 }),
-              new TextContainerProperty({ containerID: 2, containerName: "xy", xPosition: xyX, yPosition: 250, width: xyW, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 2 }),
+              new TextContainerProperty({ containerID: 2, containerName: "xy", xPosition: 2, yPosition: 250, width: 54, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 2 }),
               new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 56, yPosition: 14, width: 20, height: 274, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
               new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: namesText, zOrderIndex: 4 }),
               new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: prevText, textColor: 1, zOrderIndex: 5 }),
@@ -3700,9 +3701,11 @@ export function GlassesUI({
             return;
           }
 
-          // Even's built-in context menu: chat list filters
-          if (event.menuItemClickEvent) {
-            const id = event.menuItemClickEvent.itemID;
+          // Even's built-in context menu: chat list filters. The bridge
+          // delivers menu clicks as raw {jsonData:{itemID}} on this SDK path.
+          const menuId = event.menuItemClickEvent?.itemID ?? (event as any).jsonData?.itemID;
+          if (menuId != null) {
+            const id = menuId;
             const next =
               id === MENU_LOW_PRIORITY ? "low" :
               id === MENU_ARCHIVED ? "archived" : "normal";
