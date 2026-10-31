@@ -490,7 +490,7 @@ export function DevModeUI({
               </div>
               <p className={styles.controlHint}>
                 Chats appear on your glasses. Scrolling and selecting happen
-                on the glasses touchpad.
+                on the glasses.
               </p>
               <input
                 id="gc-focus-sentinel"
