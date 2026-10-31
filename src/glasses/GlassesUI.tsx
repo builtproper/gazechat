@@ -878,12 +878,9 @@ function clockText(): string {
 }
 
 // ── message view layout (dynamic containers, max 3 messages/page) ─────────
-const MSG_LINE_H = 28;
 const MSG_AREA_Y = 40;
-const MSG_NORMAL_MAX_LINES = 7; // 7×28 + pads + gaps = 223 ≤ 248
 const MSG_FOCUS_MAX_LINES = 8;
 const MSG_TIME_W = 56;
-const MSG_GAP = 6;
 // own messages: time LEFT, bubble right; others: bubble left, time right
 function msgGeom(isMine: boolean) {
   return isMine
@@ -893,15 +890,26 @@ function msgGeom(isMine: boolean) {
 
 function wrapToPx(text: string, maxPx: number): string[] {
   const out: string[] = [];
+  // hard-break a token that alone exceeds the width (long URLs without spaces)
+  const breakWord = (w: string): string[] => {
+    if (textPx(w) <= maxPx) return [w];
+    const parts: string[] = [];
+    let cur = "";
+    for (const ch of w) {
+      if (textPx(cur + ch) > maxPx) { parts.push(cur); cur = ch; }
+      else cur += ch;
+    }
+    if (cur) parts.push(cur);
+    return parts;
+  };
   for (const para of text.split("\n")) {
     let cur = "";
     for (const word of para.split(/\s+/)) {
       if (!word) continue;
-      const test = cur ? cur + " " + word : word;
-      if (textPx(test) <= maxPx) cur = test;
-      else {
-        if (cur) out.push(cur);
-        cur = word;
+      for (const piece of breakWord(word)) {
+        const test = cur ? cur + " " + piece : piece;
+        if (textPx(test) <= maxPx) cur = test;
+        else { if (cur) out.push(cur); cur = piece; }
       }
     }
     out.push(cur || "");
@@ -930,18 +938,19 @@ function computeMsgLayout(
   messages: BeeperMessage[],
   selIdx: number,
   block: number,
+  loading = false,
 ): { focus: boolean; items: MsgItem[] } {
   if (messages.length === 0) {
-    return { focus: false, items: [{ msg: {} as BeeperMessage, lines: ["No messages yet - send one!"], block: 0, blocks: 1 }] };
+    return { focus: false, items: [{ msg: {} as BeeperMessage, lines: [loading ? "Loading messages..." : "No messages yet - send one!"], block: 0, blocks: 1 }] };
   }
   const sel = Math.max(0, Math.min(selIdx, messages.length - 1));
   const start = Math.max(0, sel - 2);
   const win = messages.slice(start, sel + 1);
   const wrapped = win.map((m) => wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14));
-  const total = wrapped.reduce((s, w) => s + w.length, 0);
-  // normal mode if all three bubbles fit the area together (with reserve);
+  // normal mode if every bubble fits its fixed 72px slot (≤2 lines);
   // otherwise the selected message takes the full area and paginates
-  if (total <= MSG_NORMAL_MAX_LINES) {
+  const fitsAll = wrapped.every((w) => w.length <= 2);
+  if (fitsAll) {
     return { focus: false, items: win.map((m, i) => ({ msg: m, lines: wrapped[i], block: 0, blocks: 1 })) };
   }
   // focus mode: the selected message alone, paginated into blocks
@@ -3564,35 +3573,26 @@ export function GlassesUI({
       const chat = snapshot.chats.find((c) => c.id === snapshot.selectedChat);
       const chatName = chat ? truncatePx(chat.title, 380) : "Messages";
       const selIdx = Math.min(snapshot.messageScrollOffset, Math.max(0, snapshot.messages.length - 1));
-      const layout = computeMsgLayout(snapshot.messages, selIdx, msgBlockRef.current);
+      const layout = computeMsgLayout(snapshot.messages, selIdx, msgBlockRef.current, snapshot.isLoading);
       const items = layout.items;
 
-      // build the three bubble/time slots (top→bottom). Own messages: time
-      // left, bubble right; incoming: bubble left, time right. Time is
-      // vertically centered next to the bubble (own line height 2*MSG_LINE_H).
+      // FIXED geometry: time always on the right, three fixed 72px slots.
+      // Positions never change while scrolling → content updates are upgrades,
+      // not rebuilds (no logo re-render, no chatname flicker). Sender is
+      // marked by a leading glyph inside the bubble instead of time position.
+      const BUB_X = 60, BUB_W = 452, TIME_X = 516, TIME_W = 56;
       const slots = [0, 1, 2].map((i) => {
         const it = items[i];
-        if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y, h: MSG_LINE_H, timeY: MSG_AREA_Y, timeH: MSG_LINE_H, bx: 60, bw: 400, tx: 516, show: false };
-        const g = msgGeom(it.msg.isSender);
+        if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y + i * 78, h: 72, timeY: MSG_AREA_Y + i * 78 + 16, show: false };
+        const mark = it.msg.isSender ? "» " : "";
         const timeTxt = it.blocks > 1
           ? `${formatTime(it.msg.timestamp)}\n${it.block + 1}/${it.blocks}`
           : formatTime(it.msg.timestamp);
-        const bh = layout.focus ? 248 : it.lines.length * 32 + 8;
-        // time content: 1 line normally, 2 lines when a block counter follows
-        const th = it.blocks > 1 ? 70 : 40;
-        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, timeY: 0, timeH: th, bx: g.bubbleX, bw: g.bubbleW, tx: g.timeX, show: true };
+        const bh = layout.focus ? 248 : 72;
+        return { bubble: mark + it.lines.join("\n"), time: timeTxt, y: MSG_AREA_Y + i * 78, h: bh, timeY: MSG_AREA_Y + i * 78 + (layout.focus ? 90 : 16), show: true };
       });
-      // stack slots top-down; time vertically centered beside its bubble
-      let y = MSG_AREA_Y;
-      for (const s of slots) {
-        if (!s.show) continue;
-        s.y = y;
-        s.timeY = y + Math.max(0, Math.round((s.h - s.timeH) / 2));
-        y += s.h + MSG_GAP;
-      }
-      // positions/sizes cannot be upgraded — only content. Rebuild whenever the
-      // shape (which slots are visible, their y/h) changes; upgrade otherwise.
-      const shape = slots.map((s) => (s.show ? `${s.y}:${s.h}:${s.bx}:${s.tx}:${s.timeY}` : "x")).join(",");
+      // shape depends only on focus mode (fixed positions otherwise)
+      const shape = layout.focus ? "focus" : "normal";
       const contentSig = `${slots.map((s) => s.bubble).join("|")}#${slots.map((s) => s.time).join("|")}#${chatName}`;
       if (glassesLayoutRef.current === "messages" && msgSigRef.current === shape + "#" + contentSig) return;
       const needRebuild = glassesLayoutRef.current !== "messages" || msgSigRef.current.split("#")[0] !== shape;
@@ -3604,12 +3604,12 @@ export function GlassesUI({
       const textObject = [
         mk(1, "clock", 2, 54, 2, 36, clockText(), 0),
         mk(2, "chatname", 60, 452, 2, 36, chatName, 0, undefined, true),
-        mk(3, "bub0", slots[0].bx, slots[0].bw, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
-        mk(4, "time0", slots[0].tx, MSG_TIME_W, slots[0].timeY, slots[0].timeH, slots[0].time, 0, 1),
-        mk(5, "bub1", slots[1].bx, slots[1].bw, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
-        mk(6, "time1", slots[1].tx, MSG_TIME_W, slots[1].timeY, slots[1].timeH, slots[1].time, 0, 1),
-        mk(7, "bub2", slots[2].bx, slots[2].bw, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
-        mk(8, "time2", slots[2].tx, MSG_TIME_W, slots[2].timeY, slots[2].timeH, slots[2].time, 0, 1),
+        mk(3, "bub0", BUB_X, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
+        mk(4, "time0", TIME_X, TIME_W, slots[0].timeY, 40, slots[0].time, 0, 1),
+        mk(5, "bub1", BUB_X, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
+        mk(6, "time1", TIME_X, TIME_W, slots[1].timeY, 40, slots[1].time, 0, 1),
+        mk(7, "bub2", BUB_X, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
+        mk(8, "time2", TIME_X, TIME_W, slots[2].timeY, 40, slots[2].time, 0, 1),
       ];
 
       if (needRebuild) {
@@ -3809,12 +3809,13 @@ export function GlassesUI({
 
       if (snapshot.currentScreen === "chats") {
         await renderChatsPage(bridge, snapshot, nav);
-      } else if (snapshot.currentScreen === "messages" && !snapshot.isLoading) {
+      } else if (snapshot.currentScreen === "messages") {
+        // always the new bubble view — never fall through to the legacy
+        // blocky renderTextPage (that leaked "Loading messages…" + the
+        // old message list on back-navigation)
         await renderMessagesPage(bridge, snapshot, nav);
       } else {
         const lines = getDisplayLines(snapshot, nav);
-        // fullwidth blocky conversion only on message screens; startup/loading
-        // stays compact (user 31.10.: giant blocky "Loading messages" on boot)
         const text = buildGlassesText(lines, false);
         await renderTextPage(bridge, text);
       }
