@@ -942,21 +942,21 @@ function computeMsgLayout(
     return { focus: false, items: [{ msg: {} as BeeperMessage, lines: [loading ? "Loading messages..." : "No messages yet - send one!"], block: 0, blocks: 1 }] };
   }
   const sel = Math.max(0, Math.min(selIdx, messages.length - 1));
-  const start = Math.max(0, sel - 2);
-  const win = messages.slice(start, sel + 1);
-  const wrapped = win.map((m) => wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14));
-  // normal mode if every bubble fits its fixed 72px slot (≤2 lines);
-  // otherwise the selected message takes the full area and paginates
-  const fitsAll = wrapped.every((w) => w.length <= 2);
-  if (fitsAll) {
-    return { focus: false, items: win.map((m, i) => ({ msg: m, lines: wrapped[i], block: 0, blocks: 1 })) };
+  const selMsg = messages[sel];
+  const selLines = wrapToPx(msgBubbleText(selMsg, messages), msgGeom(selMsg.isSender).bubbleW - 14);
+  // focus mode ONLY when the SELECTED message is too tall for its slot —
+  // long neighbours must not promote a short selected message (bug 31.10.)
+  if (selLines.length <= 2) {
+    const start = Math.max(0, sel - 2);
+    const win = messages.slice(start, sel + 1);
+    const wrapped = win.map((m) => wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14));
+    return { focus: false, items: win.map((m, i) => ({ msg: m, lines: wrapped[i].slice(0, 2), block: 0, blocks: 1 })) };
   }
   // focus mode: the selected message alone, paginated into blocks
-  const selMsg = messages[sel];
-  const lines = wrapToPx(msgBubbleText(selMsg, messages), msgGeom(selMsg.isSender).bubbleW - 14);
+  const lines = selLines;
   const blocks = Math.max(1, Math.ceil(lines.length / MSG_FOCUS_MAX_LINES));
   const b = Math.max(0, Math.min(block, blocks - 1));
-  return { focus: true, items: [{ msg: messages[sel], lines: lines.slice(b * MSG_FOCUS_MAX_LINES, (b + 1) * MSG_FOCUS_MAX_LINES), block: b, blocks }] };
+  return { focus: true, items: [{ msg: selMsg, lines: lines.slice(b * MSG_FOCUS_MAX_LINES, (b + 1) * MSG_FOCUS_MAX_LINES), block: b, blocks }] };
 }
 
 // top-bar chat avatar: 36x36 rounded grayscale PNG (cached per chat)
@@ -1002,6 +1002,28 @@ async function renderTopAvatar(chat: any, baseUrl: string | undefined): Promise<
   ctx.putImageData(img, 0, 0);
   const bytes = pngDataUrlToBytes(cv.toDataURL("image/png"));
   topAvatarCache.set(key, bytes);
+  return bytes;
+}
+
+// top-bar messenger glyph: 36x36 grayscale PNG (vector glyph on black), cached
+const msgIconCache = new Map<string, number[]>();
+async function renderMessengerIcon(chat: any): Promise<number[]> {
+  const plat = normalizePlatform(chat?.accountID || chat?.network || "");
+  const hit = msgIconCache.get(plat);
+  if (hit) return hit;
+  const S = 36;
+  const cv = document.createElement("canvas"); cv.width = S; cv.height = S;
+  const ctx = cv.getContext("2d")!;
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, S, S);
+  try { drawPlatformGlyph(ctx, plat, 2, 2, 32); } catch {}
+  const img = ctx.getImageData(0, 0, S, S); const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = Math.round(((d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255) * 15) * 17;
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+  ctx.putImageData(img, 0, 0);
+  const bytes = pngDataUrlToBytes(cv.toDataURL("image/png"));
+  msgIconCache.set(plat, bytes);
   return bytes;
 }
 
@@ -3652,7 +3674,7 @@ export function GlassesUI({
 
       const textObject = [
         mk(1, "chatname", 44, 400, 2, 36, chatName, 0, undefined, true),
-        mk(2, "clock", 516, 56, 2, 36, clockText(), 0, 1),
+        mk(2, "clock", 456, 56, 2, 36, clockText(), 0, 1),
         mk(3, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
         mk(4, "time0", slots[0].tx, TIME_W, slots[0].timeY, 40, slots[0].time, 0, 1),
         mk(5, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
@@ -3663,9 +3685,12 @@ export function GlassesUI({
 
       if (needRebuild) {
         const rb = await bridge.rebuildPageContainer(new RebuildPageContainer({
-          containerTotalNum: 9,
+          containerTotalNum: 10,
           textObject,
-          imageObject: [new ImageContainerProperty({ containerID: 9, containerName: "topav", xPosition: 2, yPosition: 2, width: 36, height: 36, zOrderIndex: 9 })],
+          imageObject: [
+            new ImageContainerProperty({ containerID: 9, containerName: "topav", xPosition: 2, yPosition: 2, width: 36, height: 36, zOrderIndex: 9 }),
+            new ImageContainerProperty({ containerID: 10, containerName: "msgicon", xPosition: 538, yPosition: 2, width: 36, height: 36, zOrderIndex: 10 }),
+          ],
           listObject: [],
         }));
         glassesLayoutRef.current = "messages";
@@ -3673,6 +3698,8 @@ export function GlassesUI({
         try {
           const bytes = await renderTopAvatar(chat, beeperBaseRef.current);
           await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "topav", imageData: bytes }));
+          const icon = await renderMessengerIcon(chat);
+          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 10, containerName: "msgicon", imageData: icon }));
         } catch (e) { console.warn("[msg] top avatar failed:", e); }
         return;
       }
