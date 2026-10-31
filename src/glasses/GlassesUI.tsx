@@ -3577,9 +3577,9 @@ export function GlassesUI({
         const timeTxt = it.blocks > 1
           ? `${formatTime(it.msg.timestamp)}\n${it.block + 1}/${it.blocks}`
           : formatTime(it.msg.timestamp);
-        const bh = layout.focus ? 248 : it.lines.length * 29 + 6;
+        const bh = layout.focus ? 248 : it.lines.length * 32 + 8;
         // time content: 1 line normally, 2 lines when a block counter follows
-        const th = it.blocks > 1 ? 64 : 35;
+        const th = it.blocks > 1 ? 70 : 40;
         return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, timeY: 0, timeH: th, bx: g.bubbleX, bw: g.bubbleW, tx: g.timeX, show: true };
       });
       // stack slots top-down; time vertically centered beside its bubble
