@@ -865,9 +865,10 @@ function filterChats(chats: any[], filter: "normal" | "low" | "archived"): any[]
 }
 
 function filterLabel(filter: "normal" | "low" | "archived"): string {
-  // one leading space ≈ 6px (closest to the requested 7px indent)
-  if (filter === "low") return " Low\n prio";
-  if (filter === "archived") return " \nArch.";
+  // center each line inside the 54px column (space ≈ 6px → px/12 = spaces)
+  const c = (s: string) => " ".repeat(Math.max(0, Math.round((54 - textPx(s)) / 12))) + s;
+  if (filter === "low") return `${c("Low")}\n${c("prio")}`;
+  if (filter === "archived") return ` \n${c("Arch.")}`;
   return " ";
 }
 
