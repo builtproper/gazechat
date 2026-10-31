@@ -857,6 +857,7 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 export const MENU_CHATS = 1;
 export const MENU_LOW_PRIORITY = 2;
 export const MENU_ARCHIVED = 3;
+export const MENU_TYPE = 4;
 
 function filterChats(chats: any[], filter: "normal" | "low" | "archived"): any[] {
   if (filter === "low") return chats.filter((c) => c.isLowPriority && !c.isArchived);
@@ -1000,6 +1001,59 @@ function getMicIcon(): number[] {
   ctx.putImageData(img, 0, 0);
   micIconBytes = pngDataUrlToBytes(cv.toDataURL("image/png"));
   return micIconBytes;
+}
+
+// ── compose mode: private typing on the glasses via a hidden phone input ────
+// Same proven pattern as the Edit-Mode test: an invisible <input> on the phone
+// receives the hardware/software keyboard; only the text + caret are mirrored
+// to the glasses input container. Enter sends, Escape cancels.
+let composeActive = false;
+let composeText = "";
+let composeInput: HTMLInputElement | null = null;
+let composeSendFn: ((t: string) => Promise<boolean>) | null = null;
+let composeExitFn: (() => void) | null = null;
+let composeMirrorFn: (() => void) | null = null;
+
+function ensureComposeInput() {
+  if (composeInput) return composeInput;
+  const el = document.createElement("input");
+  el.type = "text";
+  el.autocapitalize = "off";
+  el.autocomplete = "off";
+  el.spellcheck = false;
+  Object.assign(el.style, {
+    position: "fixed", left: "0", top: "0", width: "1px", height: "1px",
+    opacity: "0", border: "0", padding: "0", background: "transparent", color: "transparent",
+  } as CSSStyleDeclaration);
+  document.body.appendChild(el);
+  const sync = () => { composeText = el.value; composeMirrorFn?.(); };
+  el.addEventListener("input", sync);
+  el.addEventListener("keyup", sync);
+  el.addEventListener("keydown", (e: KeyboardEvent) => {
+    if (e.key === "Enter") {
+      e.preventDefault();
+      const t = el.value.trim();
+      if (t && composeSendFn) { el.value = ""; composeText = ""; void composeSendFn(t); }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      el.value = ""; composeText = ""; composeExitFn?.();
+    }
+  });
+  el.addEventListener("blur", () => { if (composeActive) setTimeout(() => el.focus(), 50); });
+  composeInput = el;
+  return el;
+}
+
+function startCompose(send: (t: string) => Promise<boolean>, exit: () => void, mirror: () => void) {
+  composeActive = true; composeSendFn = send; composeExitFn = exit; composeMirrorFn = mirror;
+  composeText = "";
+  const el = ensureComposeInput();
+  el.value = "";
+  el.focus({ preventScroll: true });
+}
+function stopCompose() {
+  composeActive = false;
+  try { composeInput?.blur(); } catch {}
 }
 
 // top-bar chat avatar: 36x36 rounded grayscale PNG (cached per chat)
@@ -1842,6 +1896,7 @@ export function GlassesUI({
   const chatFilterRef = useRef<"normal" | "low" | "archived">("normal");
   const msgBlockRef = useRef<number>(0);
   const msgTopNameRef = useRef<string>("");
+  const msgInputSigRef = useRef<string>("");
   const msgSigRef = useRef<string>("");
   const chatPageSigRef = useRef<string>("");
   const chatSelSigRef = useRef<string>("");
@@ -3727,12 +3782,17 @@ export function GlassesUI({
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, 40, slots[1].time, 0, 1),
         mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
         mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, 40, slots[2].time, 0, 1),
-        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: "Type on the phone, enter to send", textColor: 1, zOrderIndex: 11 }),
+        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeActive ? (truncatePx(composeText, 500) + "|") : "Menu \u2192 Type message to reply", textColor: composeActive ? undefined : 1, zOrderIndex: 11 }),
       ];
 
       if (needRebuild) {
         const rb = await bridge.rebuildPageContainer(new RebuildPageContainer({
           containerTotalNum: 10,
+          menuObject: new MenuContainerProperty({
+            menuItems: [
+              new MenuItemProperty({ itemName: composeActive ? "Stop typing" : "Type message", itemID: MENU_TYPE }),
+            ],
+          }),
           textObject,
           imageObject: [
             new ImageContainerProperty({ containerID: 8, containerName: "topav", xPosition: 70, yPosition: 3, width: 34, height: 34, zOrderIndex: 8 }),
@@ -3998,6 +4058,27 @@ export function GlassesUI({
           const menuId = event.menuItemClickEvent?.itemID ?? (event as any).jsonData?.itemID;
           if (menuId != null) {
             const id = menuId;
+            if (id === MENU_TYPE) {
+              if (composeActive) {
+                stopCompose();
+              } else {
+                startCompose(
+                  async (t) => { await sendMessage(t); stopCompose(); msgInputSigRef.current = ""; void flushGlassesDisplay(); return true; },
+                  () => { msgInputSigRef.current = ""; void flushGlassesDisplay(); },
+                  () => {
+                    const b = glassesBridgeRef.current;
+                    if (!b) return;
+                    const txt = truncatePx(composeText, 500) + "|";
+                    void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt }));
+                  },
+                );
+              }
+              // rebuild so the menu label flips (Type ↔ Stop typing)
+              msgInputSigRef.current = "";
+              glassesLayoutRef.current = null;
+              void flushGlassesDisplay();
+              return;
+            }
             const next =
               id === MENU_LOW_PRIORITY ? "low" :
               id === MENU_ARCHIVED ? "archived" : "normal";
