@@ -764,8 +764,8 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
           if (blob.size > 0) {
             const bmp = await createImageBitmap(blob);
             ctx.save();
-            ctx.beginPath(); ctx.arc(AV / 2, AV / 2, AV / 2 - 2, 0, Math.PI * 2); ctx.clip();
-            ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 2, 2, AV - 4, AV - 4);
+            ctx.beginPath(); ctx.arc(AV / 2, AV / 2, AV / 2 - 7, 0, Math.PI * 2); ctx.clip();
+            ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 7, 7, AV - 14, AV - 14);
             ctx.restore();
             drew = true;
           }
@@ -779,7 +779,7 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
     // initials fallback
     const name: string = chat.title || "?";
     const ini = name.split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase();
-    ctx.fillStyle = "#fff"; ctx.font = "bold 22px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillStyle = "#fff"; ctx.font = "bold 18px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(ini || "?", AV / 2, AV / 2);
   }
   // messenger glyph top-right: vector-drawn (the 16px bitmaps in
@@ -3474,9 +3474,11 @@ export function GlassesUI({
       // same x so they interleave without overlap (brightness can differ).
       // names on odd lines (1,3,5..), previews on even lines (2,4,6..) — two
       // containers at the same x interleave without overlap (brightness differs)
-      const namesText = nameCol.map((n) => `${n}\n`).join("\n");
+      const namesText = nameCol.map((n) => `${n}\n`).join("\n").replace(/\n+$/, "");
       const prevText = prevCol.map((pv) => `\n${pv}`).join("\n");
-      const markerText = markCol.map((m) => `${m}\n `).join("\n");
+      // 9 lines (drop the trailing blank) so the 274px marker container never
+      // overflows — overflow made the firmware scroll-jump on every upgrade
+      const markerText = markCol.map((m) => `${m}\n `).join("\n").replace(/\n $/, "");
       const xyText = `${page + 1}/${totalPages}`;
 
       const pageSig = `${page}|${pageChats.map((c) => c.id).join(",")}`;
@@ -3505,7 +3507,7 @@ export function GlassesUI({
             textObject: [
               new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: clockText(), textColor: 2, zOrderIndex: 1 }),
               new TextContainerProperty({ containerID: 2, containerName: "xy", xPosition: 2, yPosition: 250, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 2 }),
-              new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 56, yPosition: 14, width: 20, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
+              new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 56, yPosition: 14, width: 20, height: 274, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
               new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: namesText, zOrderIndex: 4 }),
               new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: prevText, textColor: 1, zOrderIndex: 5 }),
             ],
@@ -3589,7 +3591,9 @@ export function GlassesUI({
         await renderChatsPage(bridge, snapshot, nav);
       } else {
         const lines = getDisplayLines(snapshot, nav);
-        const text = buildGlassesText(lines);
+        // fullwidth blocky conversion only on message screens; startup/loading
+        // stays compact (user 31.10.: giant blocky "Loading messages" on boot)
+        const text = buildGlassesText(lines, snapshot.currentScreen !== "startup");
         await renderTextPage(bridge, text);
       }
     } catch (e) {
