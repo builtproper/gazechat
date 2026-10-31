@@ -649,7 +649,7 @@ async function getSpineBytes(): Promise<number[]> {
 // in. Media comes from Beeper /v1/assets/serve (token-authenticated); on any
 // failure we draw the chat initials instead so the layout never breaks.
 const AV = 56; // avatar cell width
-const AVH = 55; // cell height: 1px under 2 text lines (bottom alignment, user 31.10.)
+const AVH = 54; // cell height: 2px under 2 text lines (bottom alignment, user 31.10.)
 
 // Media-only chats carry no preview text; Beeper's preview object also lacks
 // the message type, so we fetch the last message once per chat (cached) and
@@ -3513,9 +3513,9 @@ export function GlassesUI({
             ],
             imageObject: [
               new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 4, yPosition: 44, width: 48, height: 144, zOrderIndex: 6 }),
-              new ImageContainerProperty({ containerID: 7, containerName: "av1", xPosition: 78, yPosition: 2, width: 56, height: 110, zOrderIndex: 7 }),
-              new ImageContainerProperty({ containerID: 8, containerName: "av2", xPosition: 78, yPosition: 112, width: 56, height: 110, zOrderIndex: 8 }),
-              new ImageContainerProperty({ containerID: 9, containerName: "av3", xPosition: 78, yPosition: 222, width: 56, height: 55, zOrderIndex: 9 }),
+              new ImageContainerProperty({ containerID: 7, containerName: "av1", xPosition: 78, yPosition: 2, width: 56, height: 108, zOrderIndex: 7 }),
+              new ImageContainerProperty({ containerID: 8, containerName: "av2", xPosition: 78, yPosition: 110, width: 56, height: 108, zOrderIndex: 8 }),
+              new ImageContainerProperty({ containerID: 9, containerName: "av3", xPosition: 78, yPosition: 218, width: 56, height: 54, zOrderIndex: 9 }),
             ],
             listObject: [],
           }),
