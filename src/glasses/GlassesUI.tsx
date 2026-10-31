@@ -759,6 +759,16 @@ async function renderAvatarStrip(
     for (let i = from; i < to && i < cells.length; i++) {
       try { ctx.drawImage(cells[i], 0, (i - from) * AV); } catch {}
     }
+    // Quantize to the display's 16 gray levels: the G2 is 4-bit anyway, and
+    // full-color photo PNGs (8-11KB/slice) stalled the BLE transfer until the
+    // system killed the page (sendFailed + SYSTEM_EXIT, 30.10. live log).
+    const img = ctx.getImageData(0, 0, AV, h);
+    const d = img.data;
+    for (let i = 0; i < d.length; i += 4) {
+      const g = Math.round(((d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255) * 15) * 17;
+      d[i] = d[i + 1] = d[i + 2] = g;
+    }
+    ctx.putImageData(img, 0, 0);
     return pngDataUrlToBytes(cv.toDataURL("image/png"));
   };
   return { png1: render(0, 2), png2: render(2, 4), png3: render(4, 5) };
