@@ -935,7 +935,7 @@ const MSG_LINE_H = 30;
 const MSG_RESERVE = 8;
 const MSG_GAP = 6;
 const MSG_AREA_Y = 44;
-const MSG_AREA_H = 244; // y 44..288
+const MSG_AREA_H = 200; // y 44..244 (input bar below)
 const MSG_MAX_LINES = Math.floor((MSG_AREA_H - MSG_RESERVE) / MSG_LINE_H); // 7
 function isMediaMsg(m: BeeperMessage): boolean {
   const t = (m.type || "").toUpperCase();
@@ -975,6 +975,31 @@ function computeMsgLayout(
     used += h + (items.length > 1 ? MSG_GAP : 0);
   }
   return { focus: false, items };
+}
+
+// mic glyph for the input bar: 34x34 grayscale PNG, drawn once
+let micIconBytes: number[] | null = null;
+function getMicIcon(): number[] {
+  if (micIconBytes) return micIconBytes;
+  const S = 34;
+  const cv = document.createElement("canvas"); cv.width = S; cv.height = S;
+  const ctx = cv.getContext("2d")!;
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, S, S);
+  ctx.fillStyle = "#fff"; ctx.strokeStyle = "#fff"; ctx.lineWidth = 2;
+  // capsule
+  ctx.beginPath(); ctx.roundRect(13, 5, 8, 14, 4); ctx.fill();
+  // arc
+  ctx.beginPath(); ctx.arc(17, 16, 8, 0, Math.PI); ctx.stroke();
+  // stem + base
+  ctx.fillRect(16, 24, 2, 5); ctx.fillRect(11, 29, 12, 2);
+  const img = ctx.getImageData(0, 0, S, S); const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = Math.round(((d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255) * 15) * 17;
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+  ctx.putImageData(img, 0, 0);
+  micIconBytes = pngDataUrlToBytes(cv.toDataURL("image/png"));
+  return micIconBytes;
 }
 
 // top-bar chat avatar: 36x36 rounded grayscale PNG (cached per chat)
@@ -3702,13 +3727,17 @@ export function GlassesUI({
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, 40, slots[1].time, 0, 1),
         mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
         mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, 40, slots[2].time, 0, 1),
+        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: "Type on the phone, enter to send", textColor: 1, zOrderIndex: 11 }),
       ];
 
       if (needRebuild) {
         const rb = await bridge.rebuildPageContainer(new RebuildPageContainer({
-          containerTotalNum: 8,
+          containerTotalNum: 10,
           textObject,
-          imageObject: [new ImageContainerProperty({ containerID: 8, containerName: "topav", xPosition: 70, yPosition: 3, width: 34, height: 34, zOrderIndex: 8 })],
+          imageObject: [
+            new ImageContainerProperty({ containerID: 8, containerName: "topav", xPosition: 70, yPosition: 3, width: 34, height: 34, zOrderIndex: 8 }),
+            new ImageContainerProperty({ containerID: 12, containerName: "mic", xPosition: 540, yPosition: 250, width: 34, height: 34, zOrderIndex: 12 }),
+          ],
           listObject: [],
         }));
         glassesLayoutRef.current = "messages";
@@ -3716,6 +3745,7 @@ export function GlassesUI({
         try {
           const bytes = await renderTopAvatar(chat, beeperBaseRef.current);
           await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: "topav", imageData: bytes }));
+          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 12, containerName: "mic", imageData: getMicIcon() }));
         } catch (e) { console.warn("[msg] top avatar failed:", e); }
         return;
       }
