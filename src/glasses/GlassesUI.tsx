@@ -651,6 +651,31 @@ async function getSpineBytes(): Promise<number[]> {
 const AV = 56; // avatar cell width
 const AVH = 55; // cell height: 1px under 2 text lines (bottom alignment, user 31.10.)
 
+// Media-only chats carry no preview text; Beeper's preview object also lacks
+// the message type, so we fetch the last message once per chat (cached) and
+// label the preview with Photo/Video/Audio/Voice/File.
+const mediaTypeCache = new Map<string, string>();
+async function getMediaLabel(chat: any, client: any): Promise<string> {
+  const hit = mediaTypeCache.get(chat.id);
+  if (hit !== undefined) return hit;
+  let label = "";
+  try {
+    const res = await client.listMessages(chat.id, { limit: 1 });
+    const m = res?.messages?.[0];
+    const t = (m?.type || "").toUpperCase();
+    if (t === "IMAGE") label = "📷 Photo";
+    else if (t === "VIDEO") label = "🎬 Video";
+    else if (t === "AUDIO") label = "🎵 Audio";
+    else if (t === "VOICE") label = "🎤 Voice";
+    else if (t === "FILE") label = "📎 Attachment";
+    else if (t === "STICKER") label = "Sticker";
+    else if (t === "LOCATION") label = "Location";
+    else if (t) label = "Attachment";
+  } catch {}
+  mediaTypeCache.set(chat.id, label);
+  return label;
+}
+
 const avatarCache = new Map<string, string>(); // chatId -> dataURL of composed cell
 
 // 16px vector messenger glyphs (the 1-bit bitmaps in platformIcons render as
@@ -761,8 +786,8 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
   // platformIcons render as noise — verified 31.10.), on a black backing box
   try {
     const plat = normalizePlatform(chat.accountID || chat.network || "");
-    ctx.fillStyle = "#000"; ctx.fillRect(AV - 17, -1, 18, 18);
-    drawPlatformGlyph(ctx, plat, AV - 16, 0, 16);
+    ctx.fillStyle = "#000"; ctx.fillRect(AV - 16, -1, 17, 17);
+    drawPlatformGlyph(ctx, plat, AV - 15.5, 0, 15);
   } catch {}
   // unread badge bottom-right
   const n = chat.unreadCount || 0;
@@ -3430,10 +3455,12 @@ export function GlassesUI({
 
       const markers = pageChats.map((_, i) => (startIdx + i === nav.highlightedIndex ? "\u25B6" : " "));
       const names = pageChats.map((c) => truncatePx(c.title, 420));
-      const previews = pageChats.map((c) => {
-        const raw = ((c as any).preview?.text || "") as string;
+      const client = beeperRef.current;
+      const previews = await Promise.all(pageChats.map(async (c) => {
+        let raw = ((c as any).preview?.text || "") as string;
+        if (!raw.trim() && client) raw = await getMediaLabel(c, client);
         return truncatePx(stripUnsupportedChars(raw).replace(/\n/g, " ").trim(), 420);
-      });
+      }));
       // 2 lines per chat: line1 = name, line2 = preview (blank-pad to 5 rows)
       const nameCol: string[] = [];
       const prevCol: string[] = [];
@@ -3478,7 +3505,7 @@ export function GlassesUI({
             textObject: [
               new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: clockText(), textColor: 2, zOrderIndex: 1 }),
               new TextContainerProperty({ containerID: 2, containerName: "xy", xPosition: 2, yPosition: 250, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 2 }),
-              new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 56, yPosition: 7, width: 20, height: 281, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
+              new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 56, yPosition: 14, width: 20, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
               new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: namesText, zOrderIndex: 4 }),
               new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: prevText, textColor: 1, zOrderIndex: 5 }),
             ],
