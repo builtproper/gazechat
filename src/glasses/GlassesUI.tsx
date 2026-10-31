@@ -674,28 +674,14 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
     const raw: string | undefined =
       chat.imgURL ||
       (chat.participants?.items || []).find((p: any) => !p.isSelf && p.imgURL)?.imgURL;
-    if (raw) {
-      // Local file paths (WhatsApp/Telegram avatars) are served by the dev
-      // relay WITHOUT an auth header — a plain GET avoids the OPTIONS
-      // preflight that the Beeper gateway answers with 404.
-      const isLocal = /^(file:\/\/|[a-zA-Z]:\\)/i.test(raw);
-      let assetUrl: string;
-      let headers: Record<string, string> | undefined;
-      if (isLocal && baseUrl) {
-        assetUrl = `${normalizeBeeperBaseUrl(baseUrl).replace(/:\d+$/, "")}:8790/avatar?path=${encodeURIComponent(raw)}`;
-        // dev-server origin → relay on the same host
-        if (location.port) {
-          assetUrl = `${location.protocol}//${location.hostname}:8790/avatar?path=${encodeURIComponent(raw)}`;
-        }
-      } else if (baseUrl) {
-        assetUrl = buildBeeperAssetUrl(normalizeBeeperBaseUrl(baseUrl), raw);
-        const token = (await getApiConfig())?.token;
-        if (token) headers = { Authorization: `Bearer ${token}` };
-      } else {
-        assetUrl = raw;
-      }
+    if (raw && baseUrl) {
+      // Beeper stores avatars as local file paths; its own /v1/assets/serve
+      // endpoint (token-authenticated) serves them. The reverse proxy passes
+      // that route through, so this works without any dev relay.
+      const assetUrl = buildBeeperAssetUrl(normalizeBeeperBaseUrl(baseUrl), raw);
+      const token = (await getApiConfig())?.token;
       try {
-        const res = await fetch(assetUrl, headers ? { headers } : undefined);
+        const res = await fetch(assetUrl, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
         console.log("[avatar]", (chat.title || "").slice(0, 10), res.status, res.headers.get("content-type"));
         if (res.ok) {
           const blob = await res.blob();
@@ -3401,15 +3387,17 @@ export function GlassesUI({
       const pushAvatars = async () => {
         try {
           const gray = await renderAvatarStrip(pageChats, beeperBaseRef.current);
+          console.log("[chats] strip bytes:", gray.length);
           // each cell is AV*AV bytes (56×56); slice by cell index
           const slice = (fromCell: number, toCell: number) =>
             Array.from(gray.subarray(fromCell * AV * AV, toCell * AV * AV));
           // 3 containers: rows 0-1 (112px), 2-3 (112px), 4 (56px)
-          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 7, containerName: "av1", imageData: slice(0, 2) }));
-          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: "av2", imageData: slice(2, 4) }));
-          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "av3", imageData: slice(4, 5) }));
+          const r1 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 7, containerName: "av1", imageData: slice(0, 2) }));
+          const r2 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: "av2", imageData: slice(2, 4) }));
+          const r3 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "av3", imageData: slice(4, 5) }));
+          console.log("[chats] av updates:", JSON.stringify(r1), JSON.stringify(r2), JSON.stringify(r3));
         } catch (e) {
-          console.warn("[chats] avatars failed:", e);
+          console.warn("[chats] avatars failed:", String(e).slice(0, 150));
         }
       };
 
