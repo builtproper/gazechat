@@ -879,13 +879,18 @@ function clockText(): string {
 
 // ── message view layout (dynamic containers, max 3 messages/page) ─────────
 const MSG_LINE_H = 28;
+const MSG_PAD = 5; // vertical reserve so the firmware never shows a scrollbar
 const MSG_AREA_Y = 40;
-const MSG_NORMAL_MAX_LINES = 7; // 3 bubbles + pads + gaps must fit MSG_AREA_H
+const MSG_NORMAL_MAX_LINES = 6; // 3 bubbles must fit with pads + gaps
 const MSG_FOCUS_MAX_LINES = 8;
-const MSG_BUBBLE_X = 60;
-const MSG_BUBBLE_W = 452;
-const MSG_TIME_X = 516;
-const MSG_TIME_W = 58;
+const MSG_TIME_W = 56;
+const MSG_GAP = 6;
+// own messages: time LEFT, bubble right; others: bubble left, time right
+function msgGeom(isMine: boolean) {
+  return isMine
+    ? { timeX: 60, bubbleX: 60 + MSG_TIME_W + 4, bubbleW: 574 - (60 + MSG_TIME_W + 4) }
+    : { timeX: 574 - MSG_TIME_W, bubbleX: 60, bubbleW: 574 - 60 - MSG_TIME_W - 4 };
+}
 
 function wrapToPx(text: string, maxPx: number): string[] {
   const out: string[] = [];
@@ -915,7 +920,7 @@ function msgBubbleText(msg: BeeperMessage, all: BeeperMessage[]): string {
     const linked = all.find((m) => m.id === msg.linkedMessageID);
     if (linked) {
       const lt = stripUnsupportedChars(formatMessageText(linked)).replace(/\n/g, " ").trim();
-      if (lt) t = "Answer to: " + truncatePx(lt, MSG_BUBBLE_W - 130) + "\n" + t;
+      if (lt) t = "Answer to: " + truncatePx(lt, 300) + "\n" + t;
     }
   }
   return t;
@@ -933,13 +938,14 @@ function computeMsgLayout(
   const sel = Math.max(0, Math.min(selIdx, messages.length - 1));
   const start = Math.max(0, sel - 2);
   const win = messages.slice(start, sel + 1);
-  const wrapped = win.map((m) => wrapToPx(msgBubbleText(m, messages), MSG_BUBBLE_W - 14));
+  const wrapped = win.map((m) => wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14));
   const total = wrapped.reduce((s, w) => s + w.length, 0);
   if (total <= MSG_NORMAL_MAX_LINES) {
     return { focus: false, items: win.map((m, i) => ({ msg: m, lines: wrapped[i], block: 0, blocks: 1 })) };
   }
   // focus mode: the selected message alone, paginated into blocks
-  const lines = wrapToPx(msgBubbleText(messages[sel], messages), MSG_BUBBLE_W - 14);
+  const selMsg = messages[sel];
+  const lines = wrapToPx(msgBubbleText(selMsg, messages), msgGeom(selMsg.isSender).bubbleW - 14);
   const blocks = Math.max(1, Math.ceil(lines.length / MSG_FOCUS_MAX_LINES));
   const b = Math.max(0, Math.min(block, blocks - 1));
   return { focus: true, items: [{ msg: messages[sel], lines: lines.slice(b * MSG_FOCUS_MAX_LINES, (b + 1) * MSG_FOCUS_MAX_LINES), block: b, blocks }] };
@@ -3564,43 +3570,47 @@ export function GlassesUI({
       const layout = computeMsgLayout(snapshot.messages, selIdx, msgBlockRef.current);
       const items = layout.items;
 
-      // build the three bubble/time slots (top→bottom)
+      // build the three bubble/time slots (top→bottom). Own messages: time
+      // left, bubble right; incoming: bubble left, time right. Time is
+      // vertically centered next to the bubble (own line height 2*MSG_LINE_H).
       const slots = [0, 1, 2].map((i) => {
         const it = items[i];
-        if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y, h: MSG_LINE_H, show: false };
-        const h = it.lines.length * MSG_LINE_H;
+        if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y, h: MSG_LINE_H, timeY: MSG_AREA_Y, timeH: MSG_LINE_H, bx: 60, bw: 400, tx: 516, show: false };
+        const g = msgGeom(it.msg.isSender);
+        const h = it.lines.length * MSG_LINE_H + MSG_PAD;
         const timeTxt = it.blocks > 1
           ? `${formatTime(it.msg.timestamp)}\n${it.block + 1}/${it.blocks}`
           : formatTime(it.msg.timestamp);
-        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h, show: true };
+        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h, timeY: 0, timeH: Math.max(2 * MSG_LINE_H + MSG_PAD, h), bx: g.bubbleX, bw: g.bubbleW, tx: g.timeX, show: true };
       });
-      // stack visible bubbles with 6px gaps, top-aligned
+      // stack visible bubbles with gaps, top-aligned; center time beside bubble
       let y = MSG_AREA_Y;
       for (const s of slots) {
         if (!s.show) continue;
         s.y = y;
-        y += s.h + 6;
+        s.timeY = y + Math.round((s.h - s.timeH) / 2);
+        y += s.h + MSG_GAP;
       }
       // positions/sizes cannot be upgraded — only content. Rebuild whenever the
       // shape (which slots are visible, their y/h) changes; upgrade otherwise.
-      const shape = slots.map((s) => (s.show ? `${s.y}:${s.h}` : "x")).join(",");
+      const shape = slots.map((s) => (s.show ? `${s.y}:${s.h}:${s.timeY}:${s.bx}:${s.tx}` : "x")).join(",");
       const contentSig = `${slots.map((s) => s.bubble).join("|")}#${slots.map((s) => s.time).join("|")}#${chatName}`;
       if (glassesLayoutRef.current === "messages" && msgSigRef.current === shape + "#" + contentSig) return;
       const needRebuild = glassesLayoutRef.current !== "messages" || msgSigRef.current.split("#")[0] !== shape;
       msgSigRef.current = shape + "#" + contentSig;
 
-      const mk = (id: number, name: string, x: number, w: number, sy: number, sh: number, content: string, border: number, bright?: number) =>
-        new TextContainerProperty({ containerID: id, containerName: name, xPosition: x, yPosition: sy, width: w, height: sh, paddingLength: 2, borderWidth: border, borderColor: border ? 5 : 0, borderRadius: border ? 8 : 0, content, textColor: bright, zOrderIndex: id });
+      const mk = (id: number, name: string, x: number, w: number, sy: number, sh: number, content: string, border: number, bright?: number, capture = false) =>
+        new TextContainerProperty({ containerID: id, containerName: name, xPosition: x, yPosition: sy, width: w, height: sh, paddingLength: 2, borderWidth: border, borderColor: border ? 5 : 0, borderRadius: border ? 8 : 0, content, textColor: bright, isEventCapture: capture ? 1 : 0, zOrderIndex: id });
 
       const textObject = [
-        mk(1, "clock", 2, 54, 2, 34, clockText(), 0),
-        mk(2, "chatname", 60, 452, 2, 34, chatName, 0),
-        mk(3, "bub0", MSG_BUBBLE_X, MSG_BUBBLE_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
-        mk(4, "time0", MSG_TIME_X, MSG_TIME_W, slots[0].y, slots[0].h, slots[0].time, 0, 2),
-        mk(5, "bub1", MSG_BUBBLE_X, MSG_BUBBLE_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
-        mk(6, "time1", MSG_TIME_X, MSG_TIME_W, slots[1].y, slots[1].h, slots[1].time, 0, 2),
-        mk(7, "bub2", MSG_BUBBLE_X, MSG_BUBBLE_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
-        mk(8, "time2", MSG_TIME_X, MSG_TIME_W, slots[2].y, slots[2].h, slots[2].time, 0, 2),
+        mk(1, "clock", 2, 54, 2, 36, clockText(), 0),
+        mk(2, "chatname", 60, 452, 2, 36, chatName, 0, undefined, true),
+        mk(3, "bub0", slots[0].bx, slots[0].bw, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
+        mk(4, "time0", slots[0].tx, MSG_TIME_W, slots[0].timeY, slots[0].timeH, slots[0].time, 0, 1),
+        mk(5, "bub1", slots[1].bx, slots[1].bw, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
+        mk(6, "time1", slots[1].tx, MSG_TIME_W, slots[1].timeY, slots[1].timeH, slots[1].time, 0, 1),
+        mk(7, "bub2", slots[2].bx, slots[2].bw, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
+        mk(8, "time2", slots[2].tx, MSG_TIME_W, slots[2].timeY, slots[2].timeH, slots[2].time, 0, 1),
       ];
 
       if (needRebuild) {
@@ -3806,7 +3816,7 @@ export function GlassesUI({
         const lines = getDisplayLines(snapshot, nav);
         // fullwidth blocky conversion only on message screens; startup/loading
         // stays compact (user 31.10.: giant blocky "Loading messages" on boot)
-        const text = buildGlassesText(lines, snapshot.currentScreen !== "startup");
+        const text = buildGlassesText(lines, false);
         await renderTextPage(bridge, text);
       }
     } catch (e) {
