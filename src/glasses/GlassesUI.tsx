@@ -878,14 +878,12 @@ function clockText(): string {
 }
 
 // ── message view layout (dynamic containers, max 3 messages/page) ─────────
-const MSG_AREA_Y = 40;
 const MSG_FOCUS_MAX_LINES = 8;
-const MSG_TIME_W = 56;
-// own messages: time LEFT, bubble right; others: bubble left, time right
-function msgGeom(isMine: boolean) {
-  return isMine
-    ? { timeX: 60, bubbleX: 60 + MSG_TIME_W + 4, bubbleW: 574 - (60 + MSG_TIME_W + 4) }
-    : { timeX: 574 - MSG_TIME_W, bubbleX: 60, bubbleW: 574 - 60 - MSG_TIME_W - 4 };
+const MSG_TIME_W = 54;
+// bubble width shared by wrap calc and layout (full width minus time column)
+const MSG_BUB_W = 574 - MSG_TIME_W - 4;
+function msgGeom(_isMine: boolean) {
+  return { bubbleW: MSG_BUB_W };
 }
 
 function wrapToPx(text: string, maxPx: number): string[] {
@@ -959,6 +957,52 @@ function computeMsgLayout(
   const blocks = Math.max(1, Math.ceil(lines.length / MSG_FOCUS_MAX_LINES));
   const b = Math.max(0, Math.min(block, blocks - 1));
   return { focus: true, items: [{ msg: messages[sel], lines: lines.slice(b * MSG_FOCUS_MAX_LINES, (b + 1) * MSG_FOCUS_MAX_LINES), block: b, blocks }] };
+}
+
+// top-bar chat avatar: 36x36 rounded grayscale PNG (cached per chat)
+const topAvatarCache = new Map<string, number[]>();
+async function renderTopAvatar(chat: any, baseUrl: string | undefined): Promise<number[]> {
+  const key = chat?.id || "none";
+  const hit = topAvatarCache.get(key);
+  if (hit) return hit;
+  const S = 36;
+  const cv = document.createElement("canvas"); cv.width = S; cv.height = S;
+  const ctx = cv.getContext("2d")!;
+  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, S, S);
+  let drew = false;
+  try {
+    let raw: string | undefined = chat?.imgURL ||
+      (chat?.participants?.items || []).find((x: any) => !x.isSelf && x.imgURL)?.imgURL;
+    if (raw && /^[a-zA-Z]:[\\/]/.test(raw)) raw = "file:///" + raw.replace(/\\/g, "/");
+    if (raw && baseUrl) {
+      const assetUrl = buildBeeperAssetUrl(normalizeBeeperBaseUrl(baseUrl), raw);
+      const token = (await getApiConfig())?.token;
+      const res = await fetch(assetUrl, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+      if (res.ok) {
+        const blob = await res.blob();
+        if (blob.size > 0) {
+          const bmp = await createImageBitmap(blob);
+          ctx.save(); ctx.beginPath(); ctx.arc(S / 2, S / 2, S / 2 - 1, 0, Math.PI * 2); ctx.clip();
+          ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 1, 1, S - 2, S - 2); ctx.restore();
+          drew = true;
+        }
+      }
+    }
+  } catch {}
+  if (!drew) {
+    const ini = (chat?.title || "?").split(/\s+/).slice(0, 2).map((w: string) => w[0] || "").join("").toUpperCase();
+    ctx.fillStyle = "#fff"; ctx.font = "bold 14px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
+    ctx.fillText(ini || "?", S / 2, S / 2);
+  }
+  const img = ctx.getImageData(0, 0, S, S); const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = Math.round(((d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255) * 15) * 17;
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+  ctx.putImageData(img, 0, 0);
+  const bytes = pngDataUrlToBytes(cv.toDataURL("image/png"));
+  topAvatarCache.set(key, bytes);
+  return bytes;
 }
 
 function getMaxIndex(state: AppState, chatFilter: "normal" | "low" | "archived" = "normal"): number {
@@ -3571,28 +3615,31 @@ export function GlassesUI({
   const renderMessagesPage = useCallback(
     async (bridge: EvenAppBridge, snapshot: AppState, _nav: GlassNavState) => {
       const chat = snapshot.chats.find((c) => c.id === snapshot.selectedChat);
-      const chatName = chat ? truncatePx(chat.title, 380) : "Messages";
+      const chatName = chat ? truncatePx(chat.title, 360) : "Messages";
       const selIdx = Math.min(snapshot.messageScrollOffset, Math.max(0, snapshot.messages.length - 1));
       const layout = computeMsgLayout(snapshot.messages, selIdx, msgBlockRef.current, snapshot.isLoading);
       const items = layout.items;
 
-      // FIXED geometry: time always on the right, three fixed 72px slots.
-      // Positions never change while scrolling → content updates are upgrades,
-      // not rebuilds (no logo re-render, no chatname flicker). Sender is
-      // marked by a leading glyph inside the bubble instead of time position.
-      const BUB_X = 60, BUB_W = 452, TIME_X = 516, TIME_W = 56;
+      // Phone-style: incoming → time LEFT, bubble right; mine → bubble left,
+      // time RIGHT. Full-width bubbles (no logo column). Time positions differ
+      // per sender, so a sender-pattern change forces a rebuild (accepted:
+      // future image attachments will need re-draws regardless).
+      const TIME_W = 54, BUB_W = 574 - TIME_W - 4;
       const slots = [0, 1, 2].map((i) => {
         const it = items[i];
-        if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y + i * 78, h: 72, timeY: MSG_AREA_Y + i * 78 + 16, show: false };
-        const mark = it.msg.isSender ? "» " : "";
+        const y = 44 + i * 80;
+        if (!it) return { bubble: " ", time: " ", y, h: 74, timeY: y + 18, bx: 0, tx: 0, isMine: false, show: false };
+        const isMine = !!it.msg.isSender;
         const timeTxt = it.blocks > 1
           ? `${formatTime(it.msg.timestamp)}\n${it.block + 1}/${it.blocks}`
           : formatTime(it.msg.timestamp);
-        const bh = layout.focus ? 248 : 72;
-        return { bubble: mark + it.lines.join("\n"), time: timeTxt, y: MSG_AREA_Y + i * 78, h: bh, timeY: MSG_AREA_Y + i * 78 + (layout.focus ? 90 : 16), show: true };
+        const bh = layout.focus ? 244 : 74;
+        const bx = isMine ? 0 : TIME_W + 4;
+        const tx = isMine ? 574 - TIME_W : 0;
+        return { bubble: it.lines.join("\n"), time: timeTxt, y, h: bh, timeY: y + (layout.focus ? 90 : 18), bx, tx, isMine, show: true };
       });
-      // shape depends only on focus mode (fixed positions otherwise)
-      const shape = layout.focus ? "focus" : "normal";
+      // shape = focus mode + which slots are visible + their sender side
+      const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? (s.isMine ? "m" : "i") : "x")).join("");
       const contentSig = `${slots.map((s) => s.bubble).join("|")}#${slots.map((s) => s.time).join("|")}#${chatName}`;
       if (glassesLayoutRef.current === "messages" && msgSigRef.current === shape + "#" + contentSig) return;
       const needRebuild = glassesLayoutRef.current !== "messages" || msgSigRef.current.split("#")[0] !== shape;
@@ -3602,35 +3649,33 @@ export function GlassesUI({
         new TextContainerProperty({ containerID: id, containerName: name, xPosition: x, yPosition: sy, width: w, height: sh, paddingLength: 2, borderWidth: border, borderColor: border ? 5 : 0, borderRadius: border ? 8 : 0, content, textColor: bright, isEventCapture: capture ? 1 : 0, zOrderIndex: id });
 
       const textObject = [
-        mk(1, "clock", 2, 54, 2, 36, clockText(), 0),
-        mk(2, "chatname", 60, 452, 2, 36, chatName, 0, undefined, true),
-        mk(3, "bub0", BUB_X, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
-        mk(4, "time0", TIME_X, TIME_W, slots[0].timeY, 40, slots[0].time, 0, 1),
-        mk(5, "bub1", BUB_X, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
-        mk(6, "time1", TIME_X, TIME_W, slots[1].timeY, 40, slots[1].time, 0, 1),
-        mk(7, "bub2", BUB_X, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
-        mk(8, "time2", TIME_X, TIME_W, slots[2].timeY, 40, slots[2].time, 0, 1),
+        mk(1, "chatname", 44, 400, 2, 36, chatName, 0, undefined, true),
+        mk(2, "clock", 516, 56, 2, 36, clockText(), 0, 1),
+        mk(3, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
+        mk(4, "time0", slots[0].tx, TIME_W, slots[0].timeY, 40, slots[0].time, 0, 1),
+        mk(5, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
+        mk(6, "time1", slots[1].tx, TIME_W, slots[1].timeY, 40, slots[1].time, 0, 1),
+        mk(7, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
+        mk(8, "time2", slots[2].tx, TIME_W, slots[2].timeY, 40, slots[2].time, 0, 1),
       ];
 
       if (needRebuild) {
         const rb = await bridge.rebuildPageContainer(new RebuildPageContainer({
           containerTotalNum: 9,
           textObject,
-          imageObject: [new ImageContainerProperty({ containerID: 9, containerName: "spine", xPosition: 2, yPosition: 40, width: 54, height: 144, zOrderIndex: 9 })],
+          imageObject: [new ImageContainerProperty({ containerID: 9, containerName: "topav", xPosition: 2, yPosition: 2, width: 36, height: 36, zOrderIndex: 9 })],
           listObject: [],
         }));
         glassesLayoutRef.current = "messages";
         console.log("[msg] rebuild:", rb ? "ok" : "FAILED", "items", items.length, "focus", layout.focus);
         try {
-          const bytes = await getSpineBytes();
-          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "spine", imageData: bytes }));
-        } catch (e) { console.warn("[msg] spine failed:", e); }
+          const bytes = await renderTopAvatar(chat, beeperBaseRef.current);
+          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "topav", imageData: bytes }));
+        } catch (e) { console.warn("[msg] top avatar failed:", e); }
         return;
       }
-      // same layout shape: upgrade only the containers that changed
       const upgrades = [
-        [1, "clock", textObject[0].content],
-        [2, "chatname", textObject[1].content],
+        [1, "chatname", textObject[0].content], [2, "clock", textObject[1].content],
         [3, "bub0", textObject[2].content], [4, "time0", textObject[3].content],
         [5, "bub1", textObject[4].content], [6, "time1", textObject[5].content],
         [7, "bub2", textObject[6].content], [8, "time2", textObject[7].content],
