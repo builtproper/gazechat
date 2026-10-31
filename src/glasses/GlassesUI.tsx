@@ -878,7 +878,6 @@ function clockText(): string {
 }
 
 // ── message view layout (dynamic containers, max 3 messages/page) ─────────
-const MSG_FOCUS_MAX_LINES = 8;
 const MSG_TIME_W = 54;
 // bubble width shared by wrap calc and layout (full width minus time column)
 const MSG_BUB_W = 574 - MSG_TIME_W - 4;
@@ -932,6 +931,16 @@ function msgBubbleText(msg: BeeperMessage, all: BeeperMessage[]): string {
 }
 
 interface MsgItem { msg: BeeperMessage; lines: string[]; block: number; blocks: number }
+const MSG_LINE_H = 30;
+const MSG_RESERVE = 8;
+const MSG_GAP = 6;
+const MSG_AREA_Y = 44;
+const MSG_AREA_H = 244; // y 44..288
+const MSG_MAX_LINES = Math.floor((MSG_AREA_H - MSG_RESERVE) / MSG_LINE_H); // 7
+function isMediaMsg(m: BeeperMessage): boolean {
+  const t = (m.type || "").toUpperCase();
+  return t === "IMAGE" || t === "VIDEO";
+}
 function computeMsgLayout(
   messages: BeeperMessage[],
   selIdx: number,
@@ -944,19 +953,28 @@ function computeMsgLayout(
   const sel = Math.max(0, Math.min(selIdx, messages.length - 1));
   const selMsg = messages[sel];
   const selLines = wrapToPx(msgBubbleText(selMsg, messages), msgGeom(selMsg.isSender).bubbleW - 14);
-  // focus mode ONLY when the SELECTED message is too tall for its slot —
-  // long neighbours must not promote a short selected message (bug 31.10.)
-  if (selLines.length <= 2) {
-    const start = Math.max(0, sel - 2);
-    const win = messages.slice(start, sel + 1);
-    const wrapped = win.map((m) => wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14));
-    return { focus: false, items: win.map((m, i) => ({ msg: m, lines: wrapped[i].slice(0, 2), block: 0, blocks: 1 })) };
+  const selH = selLines.length * MSG_LINE_H + MSG_RESERVE;
+  // focus (single, paginated) when the selected message alone is too tall for
+  // the area, or when it is a media message (images need the full height)
+  if (selH > MSG_AREA_H || isMediaMsg(selMsg)) {
+    const blocks = Math.max(1, Math.ceil(selLines.length / MSG_MAX_LINES));
+    const b = Math.max(0, Math.min(block, blocks - 1));
+    return { focus: true, items: [{ msg: selMsg, lines: selLines.slice(b * MSG_MAX_LINES, (b + 1) * MSG_MAX_LINES), block: b, blocks }] };
   }
-  // focus mode: the selected message alone, paginated into blocks
-  const lines = selLines;
-  const blocks = Math.max(1, Math.ceil(lines.length / MSG_FOCUS_MAX_LINES));
-  const b = Math.max(0, Math.min(block, blocks - 1));
-  return { focus: true, items: [{ msg: selMsg, lines: lines.slice(b * MSG_FOCUS_MAX_LINES, (b + 1) * MSG_FOCUS_MAX_LINES), block: b, blocks }] };
+  // dynamic stack: fill from the selected message upward with as many as fit
+  // (max 3 — container budget), each at its natural height
+  const items: MsgItem[] = [];
+  let used = 0;
+  for (let i = sel; i >= 0 && items.length < 3; i--) {
+    const m = messages[i];
+    if (isMediaMsg(m)) break; // a media neighbour would need full height → stop
+    const lines = wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14);
+    const h = lines.length * MSG_LINE_H + MSG_RESERVE;
+    if (used + h + (items.length ? MSG_GAP : 0) > MSG_AREA_H) break;
+    items.unshift({ msg: m, lines, block: 0, blocks: 1 });
+    used += h + (items.length > 1 ? MSG_GAP : 0);
+  }
+  return { focus: false, items };
 }
 
 // top-bar chat avatar: 36x36 rounded grayscale PNG (cached per chat)
@@ -994,6 +1012,13 @@ async function renderTopAvatar(chat: any, baseUrl: string | undefined): Promise<
     ctx.fillStyle = "#fff"; ctx.font = "bold 14px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(ini || "?", S / 2, S / 2);
   }
+  // messenger glyph baked top-right (like the chat-list avatars) — one image,
+  // no separate icon container to redraw
+  try {
+    const plat = normalizePlatform(chat?.accountID || chat?.network || "");
+    ctx.fillStyle = "#000"; ctx.fillRect(S - 15, -1, 16, 16);
+    drawPlatformGlyph(ctx, plat, S - 14, 0, 14);
+  } catch {}
   const img = ctx.getImageData(0, 0, S, S); const d = img.data;
   for (let i = 0; i < d.length; i += 4) {
     const g = Math.round(((d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255) * 15) * 17;
@@ -1002,28 +1027,6 @@ async function renderTopAvatar(chat: any, baseUrl: string | undefined): Promise<
   ctx.putImageData(img, 0, 0);
   const bytes = pngDataUrlToBytes(cv.toDataURL("image/png"));
   topAvatarCache.set(key, bytes);
-  return bytes;
-}
-
-// top-bar messenger glyph: 36x36 grayscale PNG (vector glyph on black), cached
-const msgIconCache = new Map<string, number[]>();
-async function renderMessengerIcon(chat: any): Promise<number[]> {
-  const plat = normalizePlatform(chat?.accountID || chat?.network || "");
-  const hit = msgIconCache.get(plat);
-  if (hit) return hit;
-  const S = 36;
-  const cv = document.createElement("canvas"); cv.width = S; cv.height = S;
-  const ctx = cv.getContext("2d")!;
-  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, S, S);
-  try { drawPlatformGlyph(ctx, plat, 2, 2, 32); } catch {}
-  const img = ctx.getImageData(0, 0, S, S); const d = img.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const g = Math.round(((d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255) * 15) * 17;
-    d[i] = d[i + 1] = d[i + 2] = g;
-  }
-  ctx.putImageData(img, 0, 0);
-  const bytes = pngDataUrlToBytes(cv.toDataURL("image/png"));
-  msgIconCache.set(plat, bytes);
   return bytes;
 }
 
@@ -1813,6 +1816,7 @@ export function GlassesUI({
   beeperBaseRef.current = beeperConfig?.baseUrl;
   const chatFilterRef = useRef<"normal" | "low" | "archived">("normal");
   const msgBlockRef = useRef<number>(0);
+  const msgTopNameRef = useRef<string>("");
   const msgSigRef = useRef<string>("");
   const chatPageSigRef = useRef<string>("");
   const chatSelSigRef = useRef<string>("");
@@ -3624,12 +3628,19 @@ export function GlassesUI({
   useEffect(() => {
     const id = window.setInterval(() => {
       const t = clockText();
-      if (t !== clockRef.current && (glassesLayoutRef.current === "chats" || glassesLayoutRef.current === "messages")) {
-        clockRef.current = t;
-        // clock is containerID 1 on the chats page, containerID 2 on messages
-        const clockId = glassesLayoutRef.current === "messages" ? 2 : 1;
+      if (t === clockRef.current) return;
+      clockRef.current = t;
+      if (glassesLayoutRef.current === "chats") {
+        // clock is containerID 1 on the chats page
         void getBridge().then((b) =>
-          b?.textContainerUpgrade(new TextContainerUpgrade({ containerID: clockId, containerName: "clock", content: t })),
+          b?.textContainerUpgrade(new TextContainerUpgrade({ containerID: 1, containerName: "clock", content: t })),
+        );
+      } else if (glassesLayoutRef.current === "messages") {
+        // clock is embedded in the topbar container (clock | name)
+        const lead = `${t} |`;
+        const padPx = Math.max(0, 106 - textPx(lead));
+        void getBridge().then((b) =>
+          b?.textContainerUpgrade(new TextContainerUpgrade({ containerID: 1, containerName: "topbar", content: `${lead}${" ".repeat(Math.ceil(padPx / 6))}${msgTopNameRef.current}` })),
         );
       }
     }, 15000);
@@ -3639,75 +3650,80 @@ export function GlassesUI({
   const renderMessagesPage = useCallback(
     async (bridge: EvenAppBridge, snapshot: AppState, _nav: GlassNavState) => {
       const chat = snapshot.chats.find((c) => c.id === snapshot.selectedChat);
-      const chatName = chat ? truncatePx(chat.title, 360) : "Messages";
+      const chatName = chat ? truncatePx(chat.title, 300) : "Messages";
       const selIdx = Math.min(snapshot.messageScrollOffset, Math.max(0, snapshot.messages.length - 1));
       const layout = computeMsgLayout(snapshot.messages, selIdx, msgBlockRef.current, snapshot.isLoading);
       const items = layout.items;
 
       // Phone-style: incoming → time LEFT, bubble right; mine → bubble left,
-      // time RIGHT. Full-width bubbles (no logo column). Time positions differ
-      // per sender, so a sender-pattern change forces a rebuild (accepted:
-      // future image attachments will need re-draws regardless).
+      // time RIGHT. Full-width bubbles. Top bar is ONE text container
+      // (clock | <spaces> name) with the avatar image overlaid on the spaces.
       const TIME_W = 54, BUB_W = 574 - TIME_W - 4;
       const slots = [0, 1, 2].map((i) => {
         const it = items[i];
-        const y = 44 + i * 80;
-        if (!it) return { bubble: " ", time: " ", y, h: 74, timeY: y + 18, bx: 0, tx: 0, isMine: false, show: false };
+        if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y + i * 80, h: 74, timeY: MSG_AREA_Y + i * 80 + 18, bx: 0, tx: 0, isMine: false, show: false };
         const isMine = !!it.msg.isSender;
         const timeTxt = it.blocks > 1
           ? `${formatTime(it.msg.timestamp)}\n${it.block + 1}/${it.blocks}`
           : formatTime(it.msg.timestamp);
-        const bh = layout.focus ? 244 : 74;
+        const bh = layout.focus ? MSG_AREA_H : it.lines.length * MSG_LINE_H + MSG_RESERVE;
         const bx = isMine ? 0 : TIME_W + 4;
         const tx = isMine ? 574 - TIME_W : 0;
-        return { bubble: it.lines.join("\n"), time: timeTxt, y, h: bh, timeY: y + (layout.focus ? 90 : 18), bx, tx, isMine, show: true };
+        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, timeY: 0, bx, tx, isMine, show: true };
       });
-      // shape = focus mode + which slots are visible + their sender side
-      const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? (s.isMine ? "m" : "i") : "x")).join("");
-      const contentSig = `${slots.map((s) => s.bubble).join("|")}#${slots.map((s) => s.time).join("|")}#${chatName}`;
+      // stack visible slots top-down at their natural heights; center time
+      let y = MSG_AREA_Y;
+      for (const s of slots) {
+        if (!s.show) continue;
+        s.y = y;
+        s.timeY = y + Math.round((s.h - 40) / 2);
+        y += s.h + MSG_GAP;
+      }
+      // shape = focus + sender pattern + slot heights (positions can't upgrade)
+      const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}` : "x")).join("");
+      msgTopNameRef.current = chatName;
+      // pad so the name starts clear of the avatar image (x 70..104)
+      const lead = `${clockText()} |`;
+      const padPx = Math.max(0, 106 - textPx(lead));
+      const topbarText = `${lead}${" ".repeat(Math.ceil(padPx / 6))}${chatName}`;
+      const contentSig = `${slots.map((s) => s.bubble).join("|")}#${slots.map((s) => s.time).join("|")}#${topbarText}`;
       if (glassesLayoutRef.current === "messages" && msgSigRef.current === shape + "#" + contentSig) return;
       const needRebuild = glassesLayoutRef.current !== "messages" || msgSigRef.current.split("#")[0] !== shape;
       msgSigRef.current = shape + "#" + contentSig;
 
       const mk = (id: number, name: string, x: number, w: number, sy: number, sh: number, content: string, border: number, bright?: number, capture = false) =>
-        new TextContainerProperty({ containerID: id, containerName: name, xPosition: x, yPosition: sy, width: w, height: sh, paddingLength: 2, borderWidth: border, borderColor: border ? 5 : 0, borderRadius: border ? 8 : 0, content, textColor: bright, isEventCapture: capture ? 1 : 0, zOrderIndex: id });
+        new TextContainerProperty({ containerID: id, containerName: name, xPosition: x, yPosition: sy, width: w, height: sh, paddingLength: 2, borderWidth: border, borderColor: border ? 3 : 0, borderRadius: border ? 6 : 0, content, textColor: bright, isEventCapture: capture ? 1 : 0, zOrderIndex: id });
 
       const textObject = [
-        mk(1, "chatname", 44, 400, 2, 36, chatName, 0, undefined, true),
-        mk(2, "clock", 456, 56, 2, 36, clockText(), 0, 1),
-        mk(3, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
-        mk(4, "time0", slots[0].tx, TIME_W, slots[0].timeY, 40, slots[0].time, 0, 1),
-        mk(5, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
-        mk(6, "time1", slots[1].tx, TIME_W, slots[1].timeY, 40, slots[1].time, 0, 1),
-        mk(7, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
-        mk(8, "time2", slots[2].tx, TIME_W, slots[2].timeY, 40, slots[2].time, 0, 1),
+        new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 2, yPosition: 2, width: 570, height: 36, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 1, zOrderIndex: 1 }),
+        mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
+        mk(3, "time0", slots[0].tx, TIME_W, slots[0].timeY, 40, slots[0].time, 0, 1),
+        mk(4, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
+        mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, 40, slots[1].time, 0, 1),
+        mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
+        mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, 40, slots[2].time, 0, 1),
       ];
 
       if (needRebuild) {
         const rb = await bridge.rebuildPageContainer(new RebuildPageContainer({
-          containerTotalNum: 10,
+          containerTotalNum: 8,
           textObject,
-          imageObject: [
-            new ImageContainerProperty({ containerID: 9, containerName: "topav", xPosition: 2, yPosition: 2, width: 36, height: 36, zOrderIndex: 9 }),
-            new ImageContainerProperty({ containerID: 10, containerName: "msgicon", xPosition: 538, yPosition: 2, width: 36, height: 36, zOrderIndex: 10 }),
-          ],
+          imageObject: [new ImageContainerProperty({ containerID: 8, containerName: "topav", xPosition: 70, yPosition: 3, width: 34, height: 34, zOrderIndex: 8 })],
           listObject: [],
         }));
         glassesLayoutRef.current = "messages";
         console.log("[msg] rebuild:", rb ? "ok" : "FAILED", "items", items.length, "focus", layout.focus);
         try {
           const bytes = await renderTopAvatar(chat, beeperBaseRef.current);
-          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "topav", imageData: bytes }));
-          const icon = await renderMessengerIcon(chat);
-          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 10, containerName: "msgicon", imageData: icon }));
+          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: "topav", imageData: bytes }));
         } catch (e) { console.warn("[msg] top avatar failed:", e); }
         return;
       }
       const upgrades = [
-        [1, "chatname", textObject[0].content], [2, "clock", textObject[1].content],
-        [3, "bub0", textObject[2].content], [4, "time0", textObject[3].content],
-        [5, "bub1", textObject[4].content], [6, "time1", textObject[5].content],
-        [7, "bub2", textObject[6].content], [8, "time2", textObject[7].content],
+        [1, "topbar", textObject[0].content],
+        [2, "bub0", textObject[1].content], [3, "time0", textObject[2].content],
+        [4, "bub1", textObject[3].content], [5, "time1", textObject[4].content],
+        [6, "bub2", textObject[5].content], [7, "time2", textObject[6].content],
       ] as const;
       for (const [id, name, content] of upgrades) {
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: name, content }));
