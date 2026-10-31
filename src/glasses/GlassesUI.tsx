@@ -38,7 +38,7 @@ import {
   TextContainerProperty,
   TextContainerUpgrade,
 } from "@evenrealities/even_hub_sdk";
-import { getServiceIcon, getPlatformIcon } from "./platformIcons";
+import { getServiceIcon } from "./platformIcons";
 import {
   pngDataUrlToBytes,
   normalizePlatform,
@@ -648,23 +648,62 @@ async function getSpineBytes(): Promise<number[]> {
 // with the messenger icon (top-right) and unread badge (bottom-right) baked
 // in. Media comes from Beeper /v1/assets/serve (token-authenticated); on any
 // failure we draw the chat initials instead so the layout never breaks.
-const AV = 56; // avatar cell size (2 text lines tall)
-
-function drawMonoIcon(ctx: CanvasRenderingContext2D, bitmap: readonly number[], x: number, y: number, s: number) {
-  // 16x16 1-bit bitmap (2 bytes/row, MSB first) scaled to s px
-  const px = s / 16;
-  ctx.fillStyle = "#fff";
-  for (let row = 0; row < 16; row++) {
-    const b0 = bitmap[row * 2], b1 = bitmap[row * 2 + 1];
-    for (let col = 0; col < 16; col++) {
-      const byte = col < 8 ? b0 : b1;
-      const bit = (byte >> (7 - (col % 8))) & 1;
-      if (bit) ctx.fillRect(x + col * px, y + row * px, Math.ceil(px), Math.ceil(px));
-    }
-  }
-}
+const AV = 56; // avatar cell width
+const AVH = 55; // cell height: 1px under 2 text lines (bottom alignment, user 31.10.)
 
 const avatarCache = new Map<string, string>(); // chatId -> dataURL of composed cell
+
+// 16px vector messenger glyphs (the 1-bit bitmaps in platformIcons render as
+// noise at this size — verified 31.10.). White shapes on the black backing box.
+function drawPlatformGlyph(ctx: CanvasRenderingContext2D, plat: string, x: number, y: number, s: number) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.scale(s / 16, s / 16);
+  ctx.fillStyle = "#fff";
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 1.6;
+  if (plat === "whatsapp") {
+    ctx.beginPath(); ctx.arc(8, 7.5, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(3.5, 12); ctx.lineTo(2, 15.5); ctx.lineTo(6, 13.5); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#000";
+    ctx.beginPath(); ctx.arc(8, 7.5, 4.2, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(6.6, 5.4, 1.2, 3.4); ctx.fillRect(8.4, 6.2, 1.2, 2.6);
+  } else if (plat === "telegram") {
+    ctx.beginPath(); ctx.moveTo(1, 7.6); ctx.lineTo(14.6, 1.6); ctx.lineTo(12.4, 13.6); ctx.lineTo(7.6, 10.4); ctx.lineTo(5.2, 13); ctx.lineTo(4.9, 9.4); ctx.closePath(); ctx.fill();
+  } else if (plat === "signal") {
+    ctx.beginPath(); ctx.arc(8, 7, 5, Math.PI, 0); ctx.lineTo(13, 12); ctx.lineTo(3, 12); ctx.closePath(); ctx.fill();
+    ctx.fillRect(2, 12, 12, 1.6); ctx.fillRect(7, 13.6, 2, 1.6);
+  } else if (plat === "imessage" || plat === "sms") {
+    ctx.beginPath(); ctx.arc(8, 7, 6, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.moveTo(4, 11.5); ctx.lineTo(3, 15); ctx.lineTo(7, 12.6); ctx.closePath(); ctx.fill();
+    ctx.fillStyle = "#000";
+    for (const dx of [5, 8, 11]) ctx.fillRect(dx - 0.7, 6.3, 1.4, 1.4);
+  } else if (plat === "messenger") {
+    ctx.beginPath(); ctx.arc(8, 8, 6.4, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#000";
+    ctx.beginPath(); ctx.moveTo(9.6, 4.4); ctx.lineTo(6.2, 9); ctx.lineTo(8, 9); ctx.lineTo(6.6, 12.4); ctx.lineTo(10.4, 7.6); ctx.lineTo(8.4, 7.6); ctx.closePath(); ctx.fill();
+  } else if (plat === "instagram") {
+    ctx.lineWidth = 1.8;
+    ctx.beginPath(); ctx.roundRect(2, 2, 12, 12, 4); ctx.stroke();
+    ctx.beginPath(); ctx.arc(8, 8, 3.2, 0, Math.PI * 2); ctx.stroke();
+    ctx.fillRect(10.8, 4.6, 1.6, 1.6);
+  } else if (plat === "discord") {
+    ctx.beginPath(); ctx.ellipse(8, 8, 6.6, 5.4, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "#000";
+    ctx.beginPath(); ctx.ellipse(5.8, 7.4, 1.5, 2, 0, 0, Math.PI * 2); ctx.fill();
+    ctx.beginPath(); ctx.ellipse(10.2, 7.4, 1.5, 2, 0, 0, Math.PI * 2); ctx.fill();
+  } else if (plat === "slack") {
+    ctx.lineWidth = 2;
+    ctx.beginPath(); ctx.moveTo(5, 2); ctx.lineTo(3.6, 14); ctx.moveTo(12, 2); ctx.lineTo(10.6, 14); ctx.moveTo(1.6, 5.6); ctx.lineTo(14.4, 5.6); ctx.moveTo(1.2, 10.4); ctx.lineTo(14, 10.4); ctx.stroke();
+  } else if (plat === "email") {
+    ctx.fillRect(1.5, 3.5, 13, 9);
+    ctx.fillStyle = "#000"; ctx.beginPath(); ctx.moveTo(1.5, 3.5); ctx.lineTo(8, 9); ctx.lineTo(14.5, 3.5); ctx.closePath(); ctx.fill();
+  } else {
+    ctx.beginPath(); ctx.arc(8, 8, 4, 0, Math.PI * 2); ctx.fill();
+  }
+  ctx.restore();
+}
 
 async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promise<string> {
   const key = chat.id + "|" + (chat.unreadCount || 0) + "|" + (chat.accountID || "");
@@ -699,7 +738,10 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
           const blob = await res.blob();
           if (blob.size > 0) {
             const bmp = await createImageBitmap(blob);
+            ctx.save();
+            ctx.beginPath(); ctx.arc(AV / 2, AV / 2, AV / 2 - 2, 0, Math.PI * 2); ctx.clip();
             ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 2, 2, AV - 4, AV - 4);
+            ctx.restore();
             drew = true;
           }
         }
@@ -715,11 +757,12 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
     ctx.fillStyle = "#fff"; ctx.font = "bold 22px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(ini || "?", AV / 2, AV / 2);
   }
-  // messenger icon top-right (black backing box so it reads on any avatar)
+  // messenger glyph top-right: vector-drawn (the 16px bitmaps in
+  // platformIcons render as noise — verified 31.10.), on a black backing box
   try {
     const plat = normalizePlatform(chat.accountID || chat.network || "");
     ctx.fillStyle = "#000"; ctx.fillRect(AV - 17, -1, 18, 18);
-    drawMonoIcon(ctx, getPlatformIcon(plat), AV - 16, 0, 16);
+    drawPlatformGlyph(ctx, plat, AV - 16, 0, 16);
   } catch {}
   // unread badge bottom-right
   const n = chat.unreadCount || 0;
@@ -751,13 +794,13 @@ async function renderAvatarStrip(
     } catch {}
   }
   const render = (from: number, to: number): number[] => {
-    const h = (to - from) * AV;
+    const h = (to - from) * AVH;
     const cv = document.createElement("canvas");
     cv.width = AV; cv.height = h;
     const ctx = cv.getContext("2d")!;
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, AV, h);
     for (let i = from; i < to && i < cells.length; i++) {
-      try { ctx.drawImage(cells[i], 0, (i - from) * AV); } catch {}
+      try { ctx.drawImage(cells[i], 0, (i - from) * AVH, AV, AVH); } catch {}
     }
     // Quantize to the display's 16 gray levels: the G2 is 4-bit anyway, and
     // full-color photo PNGs (8-11KB/slice) stalled the BLE transfer until the
@@ -3435,15 +3478,15 @@ export function GlassesUI({
             textObject: [
               new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: clockText(), textColor: 2, zOrderIndex: 1 }),
               new TextContainerProperty({ containerID: 2, containerName: "xy", xPosition: 2, yPosition: 250, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 2 }),
-              new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 56, yPosition: 0, width: 20, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
+              new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 56, yPosition: 7, width: 20, height: 281, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
               new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: namesText, zOrderIndex: 4 }),
               new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: prevText, textColor: 1, zOrderIndex: 5 }),
             ],
             imageObject: [
               new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 4, yPosition: 44, width: 48, height: 144, zOrderIndex: 6 }),
-              new ImageContainerProperty({ containerID: 7, containerName: "av1", xPosition: 78, yPosition: 2, width: 56, height: 112, zOrderIndex: 7 }),
-              new ImageContainerProperty({ containerID: 8, containerName: "av2", xPosition: 78, yPosition: 114, width: 56, height: 112, zOrderIndex: 8 }),
-              new ImageContainerProperty({ containerID: 9, containerName: "av3", xPosition: 78, yPosition: 226, width: 56, height: 56, zOrderIndex: 9 }),
+              new ImageContainerProperty({ containerID: 7, containerName: "av1", xPosition: 78, yPosition: 2, width: 56, height: 110, zOrderIndex: 7 }),
+              new ImageContainerProperty({ containerID: 8, containerName: "av2", xPosition: 78, yPosition: 112, width: 56, height: 110, zOrderIndex: 8 }),
+              new ImageContainerProperty({ containerID: 9, containerName: "av3", xPosition: 78, yPosition: 222, width: 56, height: 55, zOrderIndex: 9 }),
             ],
             listObject: [],
           }),
