@@ -678,9 +678,14 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
   let drew = false;
   try {
     // WhatsApp puts the avatar on the participant, not the chat object
-    const raw: string | undefined =
+    let raw: string | undefined =
       chat.imgURL ||
       (chat.participants?.items || []).find((p: any) => !p.isSelf && p.imgURL)?.imgURL;
+    // WhatsApp stores bare Windows paths (C:\...); Beeper's asset route only
+    // accepts file:// URLs (or mxc://) — normalize so the serve call works.
+    if (raw && /^[a-zA-Z]:[\\/]/.test(raw)) {
+      raw = "file:///" + raw.replace(/\\/g, "/");
+    }
     if (raw && baseUrl) {
       // Beeper stores avatars as local file paths; its own /v1/assets/serve
       // endpoint (token-authenticated) serves them. The reverse proxy passes
@@ -710,9 +715,10 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
     ctx.fillStyle = "#fff"; ctx.font = "bold 22px monospace"; ctx.textAlign = "center"; ctx.textBaseline = "middle";
     ctx.fillText(ini || "?", AV / 2, AV / 2);
   }
-  // messenger icon top-right
+  // messenger icon top-right (black backing box so it reads on any avatar)
   try {
     const plat = normalizePlatform(chat.accountID || chat.network || "");
+    ctx.fillStyle = "#000"; ctx.fillRect(AV - 17, -1, 18, 18);
     drawMonoIcon(ctx, getPlatformIcon(plat), AV - 16, 0, 16);
   } catch {}
   // unread badge bottom-right
