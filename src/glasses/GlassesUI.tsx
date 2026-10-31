@@ -674,26 +674,42 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
     const raw: string | undefined =
       chat.imgURL ||
       (chat.participants?.items || []).find((p: any) => !p.isSelf && p.imgURL)?.imgURL;
-    if (raw && baseUrl) {
-      const base = normalizeBeeperBaseUrl(baseUrl);
-      // Beeper stores avatars as local file paths; the HTTP gateway serves
-      // them via /v1/assets/serve?url=... (token-authenticated).
-      const assetUrl = /^([a-zA-Z]:\\|file:\/\/)/i.test(raw)
-        ? `${base}/v1/assets/serve?url=${encodeURIComponent(raw)}`
-        : buildBeeperAssetUrl(base, raw);
-      const token = (await getApiConfig())?.token;
-      const res = await fetch(assetUrl, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
-      console.log("[avatar] fetch", res.status, res.headers.get("content-type"), `${(await res.clone().blob()).size}B`, "for", (chat.title || "").slice(0, 12));
-      if (res.ok) {
-        const blob = await res.blob();
-        if (blob.size > 0) {
-          const bmp = await createImageBitmap(blob);
-          ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 2, 2, AV - 4, AV - 4);
-          drew = true;
+    if (raw) {
+      // Local file paths (WhatsApp/Telegram avatars) are served by the dev
+      // relay WITHOUT an auth header — a plain GET avoids the OPTIONS
+      // preflight that the Beeper gateway answers with 404.
+      const isLocal = /^(file:\/\/|[a-zA-Z]:\\)/i.test(raw);
+      let assetUrl: string;
+      let headers: Record<string, string> | undefined;
+      if (isLocal && baseUrl) {
+        assetUrl = `${normalizeBeeperBaseUrl(baseUrl).replace(/:\d+$/, "")}:8790/avatar?path=${encodeURIComponent(raw)}`;
+        // dev-server origin → relay on the same host
+        if (location.port) {
+          assetUrl = `${location.protocol}//${location.hostname}:8790/avatar?path=${encodeURIComponent(raw)}`;
         }
+      } else if (baseUrl) {
+        assetUrl = buildBeeperAssetUrl(normalizeBeeperBaseUrl(baseUrl), raw);
+        const token = (await getApiConfig())?.token;
+        if (token) headers = { Authorization: `Bearer ${token}` };
+      } else {
+        assetUrl = raw;
+      }
+      try {
+        const res = await fetch(assetUrl, headers ? { headers } : undefined);
+        console.log("[avatar]", (chat.title || "").slice(0, 10), res.status, res.headers.get("content-type"));
+        if (res.ok) {
+          const blob = await res.blob();
+          if (blob.size > 0) {
+            const bmp = await createImageBitmap(blob);
+            ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 2, 2, AV - 4, AV - 4);
+            drew = true;
+          }
+        }
+      } catch (e) {
+        console.warn("[avatar] fetch threw:", String(e).slice(0, 100));
       }
     }
-  } catch { /* fall through to initials */ }
+  } catch { /* initials fallback below */ }
   if (!drew) {
     // initials fallback
     const name: string = chat.title || "?";
@@ -717,7 +733,7 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
     ctx.fillText(label, AV - bw / 2 - 1, AV - 8);
   }
   const url = cv.toDataURL("image/png");
-  avatarCache.set(key, url);
+  if (drew) avatarCache.set(key, url); // only cache successes; retry initials next time
   return url;
 }
 
@@ -1540,6 +1556,8 @@ export function GlassesUI({
   const glassesTextRef = useRef<string>("");
   const glassesChatIconSignatureRef = useRef<string>("");
   const glassesChatIconsEnabledRef = useRef<boolean>(false);
+  const beeperBaseRef = useRef<string | undefined>(beeperConfig?.baseUrl);
+  beeperBaseRef.current = beeperConfig?.baseUrl;
   const chatPageSigRef = useRef<string>("");
   const chatSelSigRef = useRef<string>("");
   const chatPageRenderedAtRef = useRef<number>(0); // timestamp of last list build
@@ -3357,7 +3375,7 @@ export function GlassesUI({
       const names = pageChats.map((c) => truncatePx(c.title, 420));
       const previews = pageChats.map((c) => {
         const raw = ((c as any).preview?.text || "") as string;
-        return truncatePx(raw.replace(/\n/g, " ").trim(), 420);
+        return truncatePx(stripUnsupportedChars(raw).replace(/\n/g, " ").trim(), 420);
       });
       // 2 lines per chat: line1 = name, line2 = preview (blank-pad to 5 rows)
       const nameCol: string[] = [];
@@ -3382,7 +3400,7 @@ export function GlassesUI({
 
       const pushAvatars = async () => {
         try {
-          const gray = await renderAvatarStrip(pageChats, beeperConfig?.baseUrl);
+          const gray = await renderAvatarStrip(pageChats, beeperBaseRef.current);
           // each cell is AV*AV bytes (56×56); slice by cell index
           const slice = (fromCell: number, toCell: number) =>
             Array.from(gray.subarray(fromCell * AV * AV, toCell * AV * AV));
