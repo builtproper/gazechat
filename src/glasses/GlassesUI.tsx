@@ -865,9 +865,10 @@ function filterChats(chats: any[], filter: "normal" | "low" | "archived"): any[]
 }
 
 function filterLabel(filter: "normal" | "low" | "archived"): string {
-  if (filter === "low") return "Low\nprio";
-  if (filter === "archived") return "Arch.";
-  return "";
+  // one leading space ≈ 6px (closest to the requested 7px indent)
+  if (filter === "low") return " Low\n prio";
+  if (filter === "archived") return " \nArch.";
+  return " ";
 }
 
 function clockText(): string {
@@ -3562,7 +3563,7 @@ export function GlassesUI({
               new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 56, yPosition: 14, width: 20, height: 274, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
               new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: namesText, zOrderIndex: 4 }),
               new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: prevText, textColor: 1, zOrderIndex: 5 }),
-              new TextContainerProperty({ containerID: 10, containerName: "label", xPosition: 2, yPosition: 186, width: 54, height: 60, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: labelText, textColor: 2, zOrderIndex: 10 }),
+              new TextContainerProperty({ containerID: 10, containerName: "label", xPosition: 2, yPosition: 192, width: 54, height: 56, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: labelText, textColor: 2, zOrderIndex: 10 }),
             ],
             imageObject: [
               new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 2, yPosition: 40, width: 54, height: 144, zOrderIndex: 6 }),
