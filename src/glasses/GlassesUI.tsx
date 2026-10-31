@@ -3604,8 +3604,10 @@ export function GlassesUI({
       const t = clockText();
       if (t !== clockRef.current && (glassesLayoutRef.current === "chats" || glassesLayoutRef.current === "messages")) {
         clockRef.current = t;
+        // clock is containerID 1 on the chats page, containerID 2 on messages
+        const clockId = glassesLayoutRef.current === "messages" ? 2 : 1;
         void getBridge().then((b) =>
-          b?.textContainerUpgrade(new TextContainerUpgrade({ containerID: 1, containerName: "clock", content: t })),
+          b?.textContainerUpgrade(new TextContainerUpgrade({ containerID: clockId, containerName: "clock", content: t })),
         );
       }
     }, 15000);
