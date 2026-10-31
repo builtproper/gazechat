@@ -35,6 +35,8 @@ import {
   ListContainerProperty,
   ListItemContainerProperty,
   RebuildPageContainer,
+  MenuContainerProperty,
+  MenuItemProperty,
   TextContainerProperty,
   TextContainerUpgrade,
 } from "@evenrealities/even_hub_sdk";
@@ -851,12 +853,29 @@ function loadImage(url: string): Promise<HTMLImageElement> {
   });
 }
 
+// Even's built-in context menu: chat list filters.
+export const MENU_CHATS = 1;
+export const MENU_LOW_PRIORITY = 2;
+export const MENU_ARCHIVED = 3;
+
+function filterChats(chats: any[], filter: "normal" | "low" | "archived"): any[] {
+  if (filter === "low") return chats.filter((c) => c.isLowPriority && !c.isArchived);
+  if (filter === "archived") return chats.filter((c) => c.isArchived);
+  return chats.filter((c) => !c.isLowPriority && !c.isArchived);
+}
+
+function filterLabel(filter: "normal" | "low" | "archived"): string {
+  if (filter === "low") return "Low-\nPriority";
+  if (filter === "archived") return "Archived";
+  return "";
+}
+
 function clockText(): string {
   const d = new Date();
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-function getMaxIndex(state: AppState): number {
+function getMaxIndex(state: AppState, chatFilter: "normal" | "low" | "archived" = "normal"): number {
   switch (state.currentScreen) {
     case "startup":
       return 0;
@@ -865,7 +884,7 @@ function getMaxIndex(state: AppState): number {
       return Math.max(0, uniqueAccounts.size); // +1 for "All Chats" at index 0
     }
     case "chats":
-      return Math.max(0, state.chats.length);
+      return Math.max(0, filterChats(state.chats, chatFilter).length);
         case "messages":
           return Math.max(0, state.messages.length - 1);
         case "quickReply":
@@ -1640,6 +1659,7 @@ export function GlassesUI({
   const glassesChatIconsEnabledRef = useRef<boolean>(false);
   const beeperBaseRef = useRef<string | undefined>(beeperConfig?.baseUrl);
   beeperBaseRef.current = beeperConfig?.baseUrl;
+  const chatFilterRef = useRef<"normal" | "low" | "archived">("normal");
   const chatPageSigRef = useRef<string>("");
   const chatSelSigRef = useRef<string>("");
   const chatPageRenderedAtRef = useRef<number>(0); // timestamp of last list build
@@ -2767,8 +2787,9 @@ export function GlassesUI({
         }
 
         case "chats": {
-          if (highlightedIndex < s.chats.length) {
-            const chat = s.chats[highlightedIndex];
+          const shown = filterChats(s.chats, chatFilterRef.current);
+          if (highlightedIndex < shown.length) {
+            const chat = shown[highlightedIndex];
             updates.currentScreen = "messages";
             updates.selectedChat = chat.id;
             updates.isLoading = true;
@@ -3230,7 +3251,7 @@ export function GlassesUI({
             return nav;
           }
 
-          const maxIdx = getMaxIndex(snapshot);
+          const maxIdx = getMaxIndex(snapshot, chatFilterRef.current);
           const newIdx = Math.max(
             0,
             Math.min(
@@ -3462,11 +3483,13 @@ export function GlassesUI({
       // image containers (144px each). Selection marker is its own column so
       // selecting only upgrades that one container (no rebuild, no jump).
       const ROWS = 5;
-      const total = snapshot.chats.length;
+      const filter = chatFilterRef.current;
+      const chats = filterChats(snapshot.chats, filter);
+      const total = chats.length;
       const totalPages = Math.max(1, Math.ceil(total / ROWS));
       const page = Math.max(0, Math.min(Math.floor(nav.highlightedIndex / ROWS), totalPages - 1));
       const startIdx = page * ROWS;
-      const pageChats = snapshot.chats.slice(startIdx, startIdx + ROWS);
+      const pageChats = chats.slice(startIdx, startIdx + ROWS);
 
       const markers = pageChats.map((_, i) => (startIdx + i === nav.highlightedIndex ? "\u25B6" : " "));
       const names = pageChats.map((c) => truncatePx(c.title, 420));
@@ -3494,11 +3517,12 @@ export function GlassesUI({
       // 9 lines (drop the trailing blank) so the 274px marker container never
       // overflows — overflow made the firmware scroll-jump on every upgrade
       const markerText = markCol.map((m) => `${m}\n `).join("\n").replace(/\n $/, "");
+      const labelText = filterLabel(filter);
       const xyText = `${page + 1}/${totalPages}`;
       const xyW = Math.max(24, Math.ceil(textPx(xyText)) + 6);
       const xyX = Math.max(2, Math.round(2 + (54 - xyW) / 2));
 
-      const pageSig = `${page}|${pageChats.map((c) => c.id).join(",")}`;
+      const pageSig = `${filter}|${page}|${pageChats.map((c) => c.id).join(",")}`;
       const selSig = `${nav.highlightedIndex}`;
 
       const pushAvatars = async () => {
@@ -3520,13 +3544,21 @@ export function GlassesUI({
         chatPageRenderedAtRef.current = Date.now();
         const rb = await bridge.rebuildPageContainer(
           new RebuildPageContainer({
-            containerTotalNum: 9,
+            containerTotalNum: 10,
+            menuObject: new MenuContainerProperty({
+              menuItems: [
+                new MenuItemProperty({ itemName: "Chats", itemID: MENU_CHATS }),
+                new MenuItemProperty({ itemName: "Low-Priority Chats", itemID: MENU_LOW_PRIORITY }),
+                new MenuItemProperty({ itemName: "Archived Chats", itemID: MENU_ARCHIVED }),
+              ],
+            }),
             textObject: [
               new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: clockText(), zOrderIndex: 1 }),
               new TextContainerProperty({ containerID: 2, containerName: "xy", xPosition: xyX, yPosition: 250, width: xyW, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 2 }),
               new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 56, yPosition: 14, width: 20, height: 274, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
               new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: namesText, zOrderIndex: 4 }),
               new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: prevText, textColor: 1, zOrderIndex: 5 }),
+              new TextContainerProperty({ containerID: 10, containerName: "label", xPosition: 2, yPosition: 186, width: 54, height: 60, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: labelText, textColor: 2, zOrderIndex: 10 }),
             ],
             imageObject: [
               new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 2, yPosition: 40, width: 54, height: 144, zOrderIndex: 6 }),
@@ -3554,6 +3586,7 @@ export function GlassesUI({
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 5, containerName: "preview", content: prevText }));
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 3, containerName: "markers", content: markerText }));
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 2, containerName: "xy", content: xyText }));
+        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 10, containerName: "label", content: labelText }));
         await pushAvatars();
         return;
       }
@@ -3664,6 +3697,22 @@ export function GlassesUI({
         glassesBridgeRef.current = bridge;
         unsubscribe = bridge.onEvenHubEvent((event: EvenHubEvent) => {
           if (nativeOverlayScreenRef.current) {
+            return;
+          }
+
+          // Even's built-in context menu: chat list filters
+          if (event.menuItemClickEvent) {
+            const id = event.menuItemClickEvent.itemID;
+            const next =
+              id === MENU_LOW_PRIORITY ? "low" :
+              id === MENU_ARCHIVED ? "archived" : "normal";
+            if (chatFilterRef.current !== next) {
+              chatFilterRef.current = next;
+              chatPageSigRef.current = "";
+              navRef.current = { ...navRef.current, highlightedIndex: 0 };
+              setNavVersion((v) => v + 1);
+              void flushGlassesDisplay();
+            }
             return;
           }
 
