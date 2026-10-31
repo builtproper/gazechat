@@ -1438,3 +1438,51 @@ body {
   color: var(--color-tc-2nd);
   flex-shrink: 0;
 }
+
+
+/* ── GazeChat control panel (replaces the conversations list) ───────────── */
+.controlPanel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  min-height: 100%;
+  padding: 2rem 1rem;
+  text-align: center;
+}
+
+.controlBanner {
+  display: inline-block;
+  padding: 0.9rem 1.4rem;
+  border: 1px solid var(--color-tc-green);
+  border-radius: 10px;
+  background: rgba(75, 185, 86, 0.12);
+  color: var(--color-tc-green);
+  font-size: 1rem;
+  font-weight: 600;
+  cursor: pointer;
+  user-select: none;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.controlHint {
+  color: var(--color-tc-2nd);
+  font-size: 0.8rem;
+  max-width: 30ch;
+}
+
+/* invisible focus target: iOS needs a user gesture before a field can hold
+   the keyboard; tapping the banner focuses this so hardware keyboards work */
+.focusSentinel {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: transparent;
+}

@@ -23,24 +23,24 @@
  */
 
 :root {
-  /* Text Colors (TC) */
-  --color-tc-highlight: #ffffff;
-  --color-tc-1st: #232323;
-  --color-tc-2nd: #7b7b7b;
-  --color-tc-red: #ff5454;
+  /* Text Colors (TC) — dark theme (GazeChat) */
+  --color-tc-highlight: #0d0d0d;
+  --color-tc-1st: #e8e8e8;
+  --color-tc-2nd: #9a9a9a;
+  --color-tc-red: #ff6b6b;
   --color-tc-green: #4bb956;
 
-  /* Background Colors (BC) */
-  --color-bc-highlight: #232323;
-  --color-bc-1st: #ffffff;
-  --color-bc-2nd: #f6f6f6;
-  --color-bc-3rd: #eeeeee;
-  --color-bc-4th: #e4e4e4;
-  --color-bc-accent: #fef991;
+  /* Background Colors (BC) — dark theme */
+  --color-bc-highlight: #4bb956;
+  --color-bc-1st: #1a1a1a;
+  --color-bc-2nd: #232323;
+  --color-bc-3rd: #0d0d0d;
+  --color-bc-4th: #2e2e2e;
+  --color-bc-accent: #1f6f2c;
 
   /* Shading Colors (SC) */
   --color-sc-1st: rgba(0, 0, 0, 0.5);
-  --color-sc-2nd: rgba(35, 35, 35, 0.08);
+  --color-sc-2nd: rgba(255, 255, 255, 0.08);
 
   /* Semantic aliases for common use cases */
   --color-text-primary: var(--color-tc-1st);
@@ -56,7 +56,7 @@
   --color-bg-accent: var(--color-bc-accent);
 
   --color-border-default: var(--color-bc-4th);
-  --color-border-subtle: rgba(35, 35, 35, 0.1);
+  --color-border-subtle: rgba(255, 255, 255, 0.12);
 
   /* Legacy color mappings for backward compatibility */
   --color-primary: var(--color-bc-highlight);

@@ -11,7 +11,6 @@ import {
   type SpeechApiConfig,
   type SpeechProviderModel,
 } from "../services";
-import { PlatformIcon } from "./PlatformIcon";
 import styles from "./DevModeUI.module.css";
 
 const TAILSCALE_SETUP_URL =
@@ -325,12 +324,9 @@ interface DevModeUIProps {
 export function DevModeUI({
   isGlassesConnected,
   currentView,
-  selectedChannel,
   selectedConversation,
   isAuthenticated = false,
   isLoading = false,
-  accounts = [],
-  chats = [],
   error,
   showSettings = false,
   apiConfig = null,
@@ -340,20 +336,9 @@ export function DevModeUI({
   onCloseSettings,
   onSaveSettings,
   onSaveSpeechSettings,
-  onChannelSelect,
-  onConversationSelect,
   onBack,
   onSendMessage,
 }: DevModeUIProps) {
-  // Format chat for display
-  const formatChat = (chat: BeeperChat) => {
-    const unread = chat.unreadCount > 0 ? ` (${chat.unreadCount})` : "";
-    const title =
-      chat.title.length > 25 ? chat.title.slice(0, 25) + "..." : chat.title;
-    return { ...chat, displayName: `${title}${unread}` };
-  };
-
-  const displayedChats = chats.map(formatChat);
   const configuredHostname = getHostnameFromBaseUrl(apiConfig?.baseUrl);
   const showTailscaleBanner =
     isAuthenticated &&
@@ -469,38 +454,6 @@ export function DevModeUI({
           <>
             {/* Navigation */}
             <nav className={styles.breadcrumb}>
-              <button
-                onClick={() => onChannelSelect("")}
-                className={currentView === "accounts" ? styles.active : ""}
-              >
-                Accounts
-              </button>
-              {selectedChannel && (
-                <>
-                  <span className={styles.separator}>/</span>
-                  <button
-                    onClick={() => onConversationSelect("")}
-                    className={currentView === "chats" ? styles.active : ""}
-                  >
-                    {selectedChannel === "all"
-                      ? "All Chats"
-                      : accounts.find((a) => a.accountID === selectedChannel)
-                          ?.user.fullName ||
-                        accounts.find((a) => a.accountID === selectedChannel)
-                          ?.user.username ||
-                        "Chats"}
-                  </button>
-                </>
-              )}
-              {selectedConversation && (
-                <>
-                  <span className={styles.separator}>/</span>
-                  <span className={styles.active}>
-                    {displayedChats.find((c) => c.id === selectedConversation)
-                      ?.title || "Chat"}
-                  </span>
-                </>
-              )}
               <button className={styles.logoutButton} onClick={onLogout}>
                 Logout
               </button>
@@ -523,98 +476,31 @@ export function DevModeUI({
               </div>
             )}
 
-            {/* Accounts View */}
-            {currentView === "accounts" && (
-              <div className={styles.list}>
-                <h2>Select an Account</h2>
-                <p className={styles.countInfo}>
-                  {accounts.length} connected accounts
-                </p>
-
-                {accounts.map((account) => (
-                  <button
-                    key={account.accountID}
-                    className={styles.listItem}
-                    onClick={() => onChannelSelect(account.accountID)}
-                  >
-                    <PlatformIcon
-                      platformId={account.accountID}
-                      size={20}
-                      className={styles.icon}
-                    />
-                    <div className={styles.accountInfo}>
-                      <span className={styles.name}>
-                        {account.user.fullName ||
-                          account.user.username ||
-                          "Unknown"}
-                      </span>
-                      <span className={styles.accountId}>
-                        {account.user.username
-                          ? `@${account.user.username}`
-                          : account.accountID}
-                      </span>
-                    </div>
-                  </button>
-                ))}
-
-                <button
-                  className={`${styles.listItem} ${styles.allChats}`}
-                  onClick={() => onChannelSelect("all")}
-                >
-                  <PlatformIcon
-                    platformId="beeper"
-                    size={20}
-                    className={styles.icon}
-                  />
-                  <div className={styles.accountInfo}>
-                    <span className={styles.name}>All Chats</span>
-                    <span className={styles.accountId}>
-                      {chats.length} conversations
-                    </span>
-                  </div>
-                </button>
+            {/* Control panel: the glasses show the chat list; the phone
+                screen only hosts the keyboard focus + status */}
+            <div className={styles.controlPanel}>
+              <div
+                className={styles.controlBanner}
+                onClick={() => {
+                  const el = document.getElementById("gc-focus-sentinel") as HTMLInputElement | null;
+                  el?.focus({ preventScroll: true });
+                }}
+              >
+                Tap here to control the app and type
               </div>
-            )}
-
-            {/* Chats View */}
-            {currentView === "chats" && (
-              <div className={styles.list}>
-                <button className={styles.backButton} onClick={onBack}>
-                  Back to Accounts
-                </button>
-                <h2>Conversations</h2>
-                <p className={styles.countInfo}>
-                  {displayedChats.length} chats
-                </p>
-
-                {displayedChats.length === 0 ? (
-                  <p className={styles.emptyState}>No conversations found</p>
-                ) : (
-                  displayedChats.map((chat) => (
-                    <button
-                      key={chat.id}
-                      className={styles.listItem}
-                      onClick={() => onConversationSelect(chat.id)}
-                    >
-                      <PlatformIcon
-                        platformId={chat.accountID}
-                        size={20}
-                        className={styles.icon}
-                      />
-                      <div className={styles.convInfo}>
-                        <span className={styles.name}>{chat.title}</span>
-                        <span className={styles.preview}>
-                          {chat.participants.total} participants
-                        </span>
-                      </div>
-                      {chat.unreadCount > 0 && (
-                        <span className={styles.badge}>{chat.unreadCount}</span>
-                      )}
-                    </button>
-                  ))
-                )}
-              </div>
-            )}
+              <p className={styles.controlHint}>
+                Chats appear on your glasses. Scrolling and selecting happen
+                on the glasses touchpad.
+              </p>
+              <input
+                id="gc-focus-sentinel"
+                className={styles.focusSentinel}
+                inputMode="none"
+                autoComplete="off"
+                aria-hidden="true"
+                tabIndex={-1}
+              />
+            </div>
 
             {/* Messages View */}
             {currentView === "messages" && (
