@@ -725,25 +725,30 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
 
 // strip = 5 cells stacked (56x280); returns full grayscale bytes, sliced
 // into 3 image containers by the caller (144px per-container height limit).
-async function renderAvatarStrip(chats: any[], baseUrl: string | undefined): Promise<Uint8Array> {
-  const h = 5 * AV;
-  const cv = document.createElement("canvas");
-  cv.width = AV; cv.height = h;
-  const ctx = cv.getContext("2d")!;
-  ctx.fillStyle = "#000"; ctx.fillRect(0, 0, AV, h);
-  for (let i = 0; i < chats.length; i++) {
-    const url = await composeAvatarCell(chats[i], baseUrl);
+// Raw grayscale bytes made updateImageRawData return imageException on the
+// avatar containers (the spine works and ships PNG) — so emit PNG per slice.
+async function renderAvatarStrip(
+  chats: any[],
+  baseUrl: string | undefined,
+): Promise<{ png1: number[]; png2: number[]; png3: number[] }> {
+  const cells: HTMLImageElement[] = [];
+  for (const c of chats) {
     try {
-      const img = await loadImage(url);
-      ctx.drawImage(img, 0, i * AV);
+      cells.push(await loadImage(await composeAvatarCell(c, baseUrl)));
     } catch {}
   }
-  const rgba = ctx.getImageData(0, 0, AV, h).data;
-  const gray = new Uint8Array(AV * h);
-  for (let i = 0, j = 0; i < rgba.length; i += 4, j++) {
-    gray[j] = (rgba[i] * 0.299 + rgba[i + 1] * 0.587 + rgba[i + 2] * 0.114) | 0;
-  }
-  return gray;
+  const render = (from: number, to: number): number[] => {
+    const h = (to - from) * AV;
+    const cv = document.createElement("canvas");
+    cv.width = AV; cv.height = h;
+    const ctx = cv.getContext("2d")!;
+    ctx.fillStyle = "#000"; ctx.fillRect(0, 0, AV, h);
+    for (let i = from; i < to && i < cells.length; i++) {
+      try { ctx.drawImage(cells[i], 0, (i - from) * AV); } catch {}
+    }
+    return pngDataUrlToBytes(cv.toDataURL("image/png"));
+  };
+  return { png1: render(0, 2), png2: render(2, 4), png3: render(4, 5) };
 }
 
 function loadImage(url: string): Promise<HTMLImageElement> {
@@ -3386,15 +3391,11 @@ export function GlassesUI({
 
       const pushAvatars = async () => {
         try {
-          const gray = await renderAvatarStrip(pageChats, beeperBaseRef.current);
-          console.log("[chats] strip bytes:", gray.length);
-          // each cell is AV*AV bytes (56×56); slice by cell index
-          const slice = (fromCell: number, toCell: number) =>
-            Array.from(gray.subarray(fromCell * AV * AV, toCell * AV * AV));
-          // 3 containers: rows 0-1 (112px), 2-3 (112px), 4 (56px)
-          const r1 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 7, containerName: "av1", imageData: slice(0, 2) }));
-          const r2 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: "av2", imageData: slice(2, 4) }));
-          const r3 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "av3", imageData: slice(4, 5) }));
+          const strip = await renderAvatarStrip(pageChats, beeperBaseRef.current);
+          console.log("[chats] strip png:", strip.png1.length, strip.png2.length, strip.png3.length);
+          const r1 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 7, containerName: "av1", imageData: strip.png1 }));
+          const r2 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: "av2", imageData: strip.png2 }));
+          const r3 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "av3", imageData: strip.png3 }));
           console.log("[chats] av updates:", JSON.stringify(r1), JSON.stringify(r2), JSON.stringify(r3));
         } catch (e) {
           console.warn("[chats] avatars failed:", String(e).slice(0, 150));
