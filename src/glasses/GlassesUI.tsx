@@ -683,6 +683,7 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
         : buildBeeperAssetUrl(base, raw);
       const token = (await getApiConfig())?.token;
       const res = await fetch(assetUrl, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+      console.log("[avatar] fetch", res.status, res.headers.get("content-type"), `${(await res.clone().blob()).size}B`, "for", (chat.title || "").slice(0, 12));
       if (res.ok) {
         const blob = await res.blob();
         if (blob.size > 0) {
@@ -3353,10 +3354,10 @@ export function GlassesUI({
       const pageChats = snapshot.chats.slice(startIdx, startIdx + ROWS);
 
       const markers = pageChats.map((_, i) => (startIdx + i === nav.highlightedIndex ? "\u25B6" : " "));
-      const names = pageChats.map((c) => truncatePx(c.title, 210));
+      const names = pageChats.map((c) => truncatePx(c.title, 420));
       const previews = pageChats.map((c) => {
         const raw = ((c as any).preview?.text || "") as string;
-        return truncatePx(raw.replace(/\n/g, " ").trim(), 190);
+        return truncatePx(raw.replace(/\n/g, " ").trim(), 420);
       });
       // 2 lines per chat: line1 = name, line2 = preview (blank-pad to 5 rows)
       const nameCol: string[] = [];
@@ -3404,15 +3405,15 @@ export function GlassesUI({
             textObject: [
               new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: clockText(), textColor: 2, zOrderIndex: 1 }),
               new TextContainerProperty({ containerID: 2, containerName: "xy", xPosition: 2, yPosition: 250, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 2 }),
-              new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 118, yPosition: 2, width: 20, height: 284, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
-              new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 138, yPosition: 2, width: 436, height: 284, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: namesText, zOrderIndex: 4 }),
-              new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 138, yPosition: 2, width: 436, height: 284, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: prevText, textColor: 1, zOrderIndex: 5 }),
+              new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 56, yPosition: 0, width: 20, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, isEventCapture: 1, zOrderIndex: 3 }),
+              new TextContainerProperty({ containerID: 4, containerName: "names", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: namesText, zOrderIndex: 4 }),
+              new TextContainerProperty({ containerID: 5, containerName: "preview", xPosition: 138, yPosition: 0, width: 438, height: 288, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: prevText, textColor: 1, zOrderIndex: 5 }),
             ],
             imageObject: [
               new ImageContainerProperty({ containerID: 6, containerName: "spine", xPosition: 4, yPosition: 44, width: 48, height: 144, zOrderIndex: 6 }),
-              new ImageContainerProperty({ containerID: 7, containerName: "av1", xPosition: 60, yPosition: 2, width: 56, height: 112, zOrderIndex: 7 }),
-              new ImageContainerProperty({ containerID: 8, containerName: "av2", xPosition: 60, yPosition: 114, width: 56, height: 112, zOrderIndex: 8 }),
-              new ImageContainerProperty({ containerID: 9, containerName: "av3", xPosition: 60, yPosition: 226, width: 56, height: 56, zOrderIndex: 9 }),
+              new ImageContainerProperty({ containerID: 7, containerName: "av1", xPosition: 78, yPosition: 2, width: 56, height: 112, zOrderIndex: 7 }),
+              new ImageContainerProperty({ containerID: 8, containerName: "av2", xPosition: 78, yPosition: 114, width: 56, height: 112, zOrderIndex: 8 }),
+              new ImageContainerProperty({ containerID: 9, containerName: "av3", xPosition: 78, yPosition: 226, width: 56, height: 56, zOrderIndex: 9 }),
             ],
             listObject: [],
           }),
