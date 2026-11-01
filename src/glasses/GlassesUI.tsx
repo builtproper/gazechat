@@ -979,17 +979,19 @@ function computeMsgLayout(
     const b = Math.max(0, Math.min(block, blocks - 1));
     return { focus: true, items: [{ msg: selMsg, lines: selLines.slice(b * MSG_MAX_LINES, (b + 1) * MSG_MAX_LINES), block: b, blocks }] };
   }
-  // dynamic stack: all messages when ≤3 (scrolling must never hide one);
-  // otherwise the window ending at the selection. Neighbours that don't fit
-  // are skipped instead of truncating the view.
-  const win = messages.length <= 3 ? messages : messages.slice(Math.max(0, sel - 2), sel + 1);
+  // dynamic stack: window ends AT the selection (it is always shown first,
+  // older neighbours fill the rest and are skipped when they don't fit —
+  // bug 01.11.: oldest-first stacking dropped the newest message when older
+  // ones filled the area before it was reached)
+  const win = messages.slice(Math.max(0, sel - 2), sel + 1);
   const items: MsgItem[] = [];
   let used = 0;
-  for (const m of win) {
+  for (let i = win.length - 1; i >= 0; i--) {
+    const m = win[i];
     const lines = wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14);
     const h = lines.length * MSG_LINE_H + MSG_RESERVE;
     if (used + h + (items.length ? MSG_GAP : 0) > MSG_AREA_H) continue;
-    items.push({ msg: m, lines, block: 0, blocks: 1 });
+    items.unshift({ msg: m, lines, block: 0, blocks: 1 });
     used += h + (items.length > 1 ? MSG_GAP : 0);
   }
   return { focus: false, items };
