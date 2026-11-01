@@ -365,7 +365,7 @@ const GLYPH_W: Record<string, number> = {
   "ä": 10.8, "ö": 9.8, "ü": 10.8, "ß": 9.8, "Ä": 12.8, "Ö": 11.7, "Ü": 11.7,
   "|": 5.0, "▏": 20.0, "[": 6.5, "]": 6.5, "‹": 8.0, "›": 8.0, "…": 16.0,
 };
-const glyphW = (c: string) => GLYPH_W[c] ?? 11.7;
+const glyphW = (c: string) => GLYPH_W[c] ?? (c.codePointAt(0)! > 0x2600 ? 16 : 11.7);
 const textPx = (t: string): number => [...t].reduce((s, c) => s + glyphW(c), 0);
 
 // Truncate to a pixel budget (adds '…' when cut).
@@ -898,24 +898,6 @@ function clockText(): string {
 // Beeper reports reactions natively (message.reactions[].reactionKey).
 // The glasses font has no emoji glyphs, so common reactions map to short
 // ASCII markers shown after the time. Unknown emoji fall back to "*".
-const REACTION_MARKERS: Record<string, string> = {
-  '\u{1F44D}': "+1",   // thumbs up
-  '\u{1F44E}': "-1",   // thumbs down
-  '\u{2764}\uFE0F?': "LO",  // heavy heart
-  '\u{2764}': "LO",
-  '\u{1F602}': "lol",  // tears of joy
-  '\u{1F62E}': "omg",  // open mouth
-  '\u{1F622}': "sad",  // crying
-  '\u{1F64F}': "pray", // folded hands
-  '\u{1F525}': "fire", // flame
-  '\u{1F389}': "yay",  // party
-  '\u{1F621}': "angry",
-  '\u{1F44F}': "clap",
-  '\u{1F914}': "hmm",
-  '\u{1F44B}': "hi",
-  '\u{2705}': "ok",    // check
-  '\u{274C}': "no",
-};
 function reactionText(m: BeeperMessage): string {
   const rs = m.reactions;
   if (!Array.isArray(rs) || rs.length === 0) return "";
@@ -924,10 +906,11 @@ function reactionText(m: BeeperMessage): string {
     const key = (r as { reactionKey?: string; emoji?: unknown }).reactionKey
       ?? (typeof (r as { emoji?: unknown }).emoji === "string" ? (r as { emoji: string }).emoji : "");
     if (!key) continue;
-    const marker = REACTION_MARKERS[key] || "*";
-    counts.set(marker, (counts.get(marker) || 0) + 1);
+    counts.set(key, (counts.get(key) || 0) + 1);
   }
-  const parts = [...counts.entries()].map(([mk, n]) => (n > 1 ? `${mk}x${n}` : mk));
+  // the G2 firmware renders common emoji natively (verified: 😀 ❤) — show the
+  // reaction as-is; unknown glyphs are skipped by the firmware.
+  const parts = [...counts.entries()].map(([em, n]) => (n > 1 ? `${em}${n}` : em));
   return parts.length ? " " + parts.join(" ") : "";
 }
 const MSG_TIME_W = 90;
