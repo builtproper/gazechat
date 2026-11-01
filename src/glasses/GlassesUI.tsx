@@ -1057,10 +1057,12 @@ function getMicIcon(dim = false): number[] {
   // stem + base
   ctx.fillRect(16, 24, 2, 5); ctx.fillRect(11, 29, 12, 2);
   const img = ctx.getImageData(0, 0, S, S); const d = img.data;
-  const lvl = dim ? 5 : 15; // grayscale levels: full=15, dim=5
+  // scale luminance by lvl/15 — the old quantization formula mapped FULL
+  // WHITE to 255 in both variants, so the "dim" mic looked identical
+  const lvl = dim ? 5 : 15;
   for (let i = 0; i < d.length; i += 4) {
-    const g = Math.round(((d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255) * lvl) * Math.round(255 / lvl);
-    d[i] = d[i + 1] = d[i + 2] = Math.min(255, g);
+    const g = Math.round(((d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) * lvl) / 15);
+    d[i] = d[i + 1] = d[i + 2] = g;
   }
   ctx.putImageData(img, 0, 0);
   const bytes = pngDataUrlToBytes(cv.toDataURL("image/png"));
@@ -3656,11 +3658,13 @@ export function GlassesUI({
               else { const pi = pages.indexOf(p); newFocus = pi < pages.length - 1 ? pages[pi + 1].end : focus; newBlock = 0; }
             }
             newFocus = Math.max(-1, Math.min(newFocus, messages.length - 1));
+            console.log("[foc] scroll", focus, "->", newFocus, "block", newBlock, "changed", newFocus !== focus || newBlock !== msgBlockRef.current);
             if (newFocus !== focus || newBlock !== msgBlockRef.current) {
               msgBlockRef.current = newBlock;
               msgFocusRef.current = newFocus;
               // mic brightness swap rides without a rebuild
               const b = glassesBridgeRef.current;
+              console.log("[foc] mic swap: bridge", !!b, "dimNow", micDimRef.current, "->", newFocus >= 0);
               if (b && (newFocus >= 0) !== micDimRef.current) {
                 micDimRef.current = newFocus >= 0;
                 void b.updateImageRawData(new ImageRawDataUpdate({ containerID: 12, containerName: "mic", imageData: getMicIcon(micDimRef.current) }));
@@ -3945,9 +3949,10 @@ export function GlassesUI({
         const bx = isMine ? 0 : TIME_W + 4;
         const tx = isMine ? 574 - TIME_W : 0;
         const th = timeLines.filter(Boolean).length * MSG_LINE_H + MSG_RESERVE;
-        const bright = focus === slotIdx[i] ? 4 : 3;
+        const bright = focus === slotIdx[i] ? 4 : 2;
         return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
       });
+      console.log("[foc] render focus", focus, "slotIdx", JSON.stringify(slotIdx), "brights", slots.map((s) => s.bright).join(","));
       // stack slots top-down at their natural heights; center time beside bubble
       let y = MSG_AREA_Y;
       for (const s of slots) {
