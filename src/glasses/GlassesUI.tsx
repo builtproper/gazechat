@@ -1012,6 +1012,7 @@ function getMicIcon(): number[] {
 let composeText = "";
 let composeCaret = 0;
 let composeArmed = false;
+let composeWantFocus = false;
 let composeMirror: (() => void) | null = null;
 let composeSend: ((t: string) => Promise<boolean>) | null = null;
 let composeInput: HTMLInputElement | null = null;
@@ -1084,15 +1085,31 @@ function ensureComposeInput() {
     else handled = false;
     if (handled) { e.preventDefault(); el.setSelectionRange(pos, pos); syncFromInput(el); }
   });
-  el.addEventListener("blur", () => { if (composeArmed) setTimeout(() => el.focus(), 50); });
+  el.addEventListener("blur", () => { if (composeArmed && composeWantFocus) setTimeout(() => el.focus(), 50); });
+  // any other field taking focus (settings inputs) releases the glasses grab
+  document.addEventListener("focusin", (ev) => {
+    if (ev.target !== el) composeWantFocus = false;
+  });
   composeInput = el;
   return el;
 }
 export function gcArmCompose(on: boolean) {
   composeArmed = on;
   const el = ensureComposeInput();
-  if (on) { el.focus({ preventScroll: true }); if (!composePoll) composePoll = setInterval(() => { if (composeArmed) syncFromInput(el); }, 80); }
-  else { try { el.blur(); } catch {} if (composePoll) { clearInterval(composePoll); composePoll = null; } }
+  if (on) {
+    composeWantFocus = true;
+    el.focus({ preventScroll: true });
+    if (!composePoll) composePoll = setInterval(() => { if (composeArmed) syncFromInput(el); }, 80);
+  } else {
+    composeWantFocus = false;
+    try { el.blur(); } catch {}
+    if (composePoll) { clearInterval(composePoll); composePoll = null; }
+  }
+}
+// Explicit user gesture (banner tap) reclaims keyboard focus for the glasses.
+export function gcFocusCompose() {
+  composeWantFocus = true;
+  ensureComposeInput().focus({ preventScroll: true });
 }
 export function gcRegisterSend(fn: (t: string) => Promise<boolean>) { composeSend = fn; }
 

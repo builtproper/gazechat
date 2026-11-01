@@ -12,6 +12,7 @@ import {
   type SpeechProviderModel,
 } from "../services";
 import styles from "./DevModeUI.module.css";
+import { gcFocusCompose } from "../glasses/GlassesUI";
 
 const TAILSCALE_SETUP_URL =
   "https://github.com/thibautrey/even-messages/blob/main/docs/TAILSCALE_SETUP.md";
@@ -321,6 +322,24 @@ interface DevModeUIProps {
   scrollToBottomRef?: React.MutableRefObject<(() => void) | null>;
 }
 
+// keep the app inside the visible viewport so the iOS keyboard never covers
+// the footer/status bar (layout viewport ignores the keyboard, visual doesn't)
+function useViewportHeight() {
+  useEffect(() => {
+    const apply = () => {
+      const h = window.visualViewport?.height || window.innerHeight;
+      document.documentElement.style.setProperty("--app-h", `${h}px`);
+    };
+    apply();
+    window.visualViewport?.addEventListener("resize", apply);
+    window.addEventListener("resize", apply);
+    return () => {
+      window.visualViewport?.removeEventListener("resize", apply);
+      window.removeEventListener("resize", apply);
+    };
+  }, []);
+}
+
 export function DevModeUI({
   isGlassesConnected,
   currentView,
@@ -339,6 +358,7 @@ export function DevModeUI({
   onBack,
   onSendMessage,
 }: DevModeUIProps) {
+  useViewportHeight();
   const configuredHostname = getHostnameFromBaseUrl(apiConfig?.baseUrl);
   const showTailscaleBanner =
     isAuthenticated &&
@@ -482,6 +502,7 @@ export function DevModeUI({
               <div
                 className={styles.controlBanner}
                 onClick={() => {
+                  gcFocusCompose();
                   const el = document.getElementById("gc-focus-sentinel") as HTMLInputElement | null;
                   el?.focus({ preventScroll: true });
                 }}
