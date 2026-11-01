@@ -412,6 +412,23 @@ function getMessagePreview(msg: BeeperMessage): string {
 }
 
 // Word-wrap text to fit within maxWidth, breaking words as needed
+// date tag above the time for older messages:
+// today → none; ≤7 days → Mon/Tue/…; ≤1 year → TT.MM.; older → TT.MM.JJ
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+function msgDateTag(timestamp: string): string {
+  const d = new Date(timestamp);
+  if (isNaN(d.getTime())) return "";
+  const now = new Date();
+  const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const ageDays = Math.floor((startOfToday - new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()) / 86400000);
+  if (ageDays <= 0) return "";
+  if (ageDays <= 7) return DAY_NAMES[d.getDay()];
+  const dd = String(d.getDate()).padStart(2, "0");
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  if (ageDays > 365) return `${dd}.${mm}.${String(d.getFullYear()).slice(-2)}`;
+  return `${dd}.${mm}.`;
+}
+
 function formatTime(timestamp: string): string {
   return new Date(timestamp)
     .toLocaleTimeString([], {
@@ -3818,13 +3835,14 @@ export function GlassesUI({
         const it = items[i];
         if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y + i * 80, h: 74, th: 40, timeY: MSG_AREA_Y + i * 80 + 18, bx: 0, tx: 0, isMine: false, show: false };
         const isMine = !!it.msg.isSender;
-        const timeTxt = it.blocks > 1
-          ? `${formatTime(it.msg.timestamp)}\n${it.block + 1}/${it.blocks}`
-          : formatTime(it.msg.timestamp);
+        const tag = msgDateTag(it.msg.timestamp);
+        const timeLines = [tag, formatTime(it.msg.timestamp)];
+        if (it.blocks > 1) timeLines.push(`${it.block + 1}/${it.blocks}`);
+        const timeTxt = timeLines.filter(Boolean).join("\n");
         const bh = layout.focus ? MSG_AREA_H : it.lines.length * MSG_LINE_H + MSG_RESERVE;
         const bx = isMine ? 0 : TIME_W + 4;
         const tx = isMine ? 574 - TIME_W : 0;
-        const th = it.blocks > 1 ? 68 : 40; // 2 lines + reserve when X/Y follows
+        const th = timeLines.filter(Boolean).length * 30 + 8; // date/time/block lines + reserve
         return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, show: true };
       });
       // stack visible slots top-down at their natural heights; center time
@@ -3833,7 +3851,9 @@ export function GlassesUI({
         if (!s.show) continue;
         s.y = y;
         s.timeY = y + Math.max(0, Math.round((s.h - s.th) / 2));
-        y += s.h + MSG_GAP;
+        // advance past whichever is taller — a date-tagged time column must
+        // not bleed into the next slot
+        y += Math.max(s.h, s.th) + MSG_GAP;
       }
       // shape = focus + sender pattern + slot heights (positions can't upgrade)
       const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}:${s.th}` : "x")).join("");
