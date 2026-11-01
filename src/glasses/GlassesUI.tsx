@@ -901,17 +901,12 @@ function clockText(): string {
 function reactionText(m: BeeperMessage): string {
   const rs = m.reactions;
   if (!Array.isArray(rs) || rs.length === 0) return "";
-  const counts = new Map<string, number>();
-  for (const r of rs) {
-    const key = (r as { reactionKey?: string; emoji?: unknown }).reactionKey
-      ?? (typeof (r as { emoji?: unknown }).emoji === "string" ? (r as { emoji: string }).emoji : "");
-    if (!key) continue;
-    counts.set(key, (counts.get(key) || 0) + 1);
-  }
-  // the G2 firmware renders common emoji natively (verified: 😀 ❤) — show the
-  // reaction as-is; unknown glyphs are skipped by the firmware.
-  const parts = [...counts.entries()].map(([em, n]) => (n > 1 ? `${em}${n}` : em));
-  return parts.length ? " " + parts.join(" ") : "";
+  // show only ONE reaction (the last = newest Beeper appends); the G2 firmware
+  // renders common emoji natively (verified: 😀 ❤), unknown glyphs are skipped.
+  const last = rs[rs.length - 1] as { reactionKey?: string; emoji?: unknown };
+  const key = last.reactionKey
+    ?? (typeof last.emoji === "string" ? last.emoji : "");
+  return key ? " " + key : "";
 }
 const MSG_TIME_W = 90;
 // bubble width shared by wrap calc and layout (full width minus time column)
