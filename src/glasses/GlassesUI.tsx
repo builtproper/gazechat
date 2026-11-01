@@ -2892,6 +2892,12 @@ export function GlassesUI({
         if (nativeOverlayScreenRef.current) {
           return;
         }
+        // don't poll while the list isn't visible: opening a chat marks it
+        // read → the poll reordered the list and rebuilt the whole page
+        // (avatar re-push = flash) right between tap and message view
+        if (stateRef.current.currentScreen !== "chats") {
+          return;
+        }
         await loadChats(state.selectedAccount, {
           silent: true,
           preserveExisting: true,
@@ -4098,9 +4104,10 @@ export function GlassesUI({
       if (snapshot.currentScreen === "chats") {
         await renderChatsPage(bridge, snapshot, nav);
       } else if (snapshot.currentScreen === "messages") {
-        // switch to the messages frame IMMEDIATELY on tap (it shows
-        // "Loading messages…" inside) — keeping the chat list visible until
-        // the data arrived made the list flash right before the switch
+        // keep the chat list until the first messages arrive (single switch,
+        // no placeholder-frame double flash); the chats poll is paused on this
+        // screen so the list can't rebuild underneath (that was the flash)
+        if (snapshot.isLoading && snapshot.messages.length === 0) return;
         await renderMessagesPage(bridge, snapshot, nav);
       } else {
         const lines = getDisplayLines(snapshot, nav);
