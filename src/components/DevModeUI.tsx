@@ -12,7 +12,6 @@ import {
   type SpeechProviderModel,
 } from "../services";
 import styles from "./DevModeUI.module.css";
-import { gcSetComposeText, gcSendCompose } from "../glasses/GlassesUI";
 
 const TAILSCALE_SETUP_URL =
   "https://github.com/thibautrey/even-messages/blob/main/docs/TAILSCALE_SETUP.md";
@@ -493,20 +492,6 @@ export function DevModeUI({
                 Chats appear on your glasses. Scrolling and selecting happen
                 on the glasses.
               </p>
-              <form
-                className={styles.composeRow}
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  void gcSendCompose();
-                }}
-              >
-                <input
-                  className={styles.composeInput}
-                  placeholder="Type to mirror onto the glasses..."
-                  onInput={(e) => gcSetComposeText((e.target as HTMLInputElement).value)}
-                />
-                <button type="submit" className={styles.composeSend}>Send</button>
-              </form>
               <input
                 id="gc-focus-sentinel"
                 className={styles.focusSentinel}
@@ -1461,7 +1446,6 @@ function MessagesView({
     if (input.value.trim()) {
       onSendMessage(input.value.trim());
       input.value = "";
-      gcSetComposeText("");
     }
   };
 
@@ -1590,7 +1574,6 @@ function MessagesView({
               type="text"
               placeholder="Type a message..."
               className={styles.input}
-              onInput={(e) => gcSetComposeText((e.target as HTMLInputElement).value)}
             />
             <button type="submit" className={styles.sendButton}>
               Send

@@ -1003,25 +1003,98 @@ function getMicIcon(): number[] {
   return micIconBytes;
 }
 
-// ── compose mirror: the phone's message input mirrors its live text to the
-// glasses input container (full brightness while typing, dim hint otherwise) ─
+// ── compose editor: private typing on the glasses via a hidden phone input ──
+// Same proven engine as the Edit-Mode test: an invisible <input> receives the
+// hardware/software keyboard (nothing shows on the phone = privacy); only a
+// pixel-windowed slice around the caret is mirrored to the glasses input
+// container. Ctrl/Alt+arrows move the caret, Ctrl+Backspace/Delete delete
+// words, Enter sends, Escape clears.
 let composeText = "";
+let composeCaret = 0;
+let composeArmed = false;
 let composeMirror: (() => void) | null = null;
 let composeSend: ((t: string) => Promise<boolean>) | null = null;
-export function gcSetComposeText(t: string) {
-  composeText = t;
-  composeMirror?.();
+let composeInput: HTMLInputElement | null = null;
+let composePoll: ReturnType<typeof setInterval> | null = null;
+const COMPOSE_PX = 520; // usable width of the glasses input container
+
+function composeWindow(): string {
+  const text = composeText;
+  const caret = Math.max(0, Math.min(composeCaret, text.length));
+  let start = caret, end = caret, w = glyphW("|"), grow = true;
+  while (true) {
+    const room = COMPOSE_PX - w;
+    if (room <= 0) break;
+    if (grow && end < text.length) {
+      const cw = glyphW(text[end]);
+      if (cw > room) { if (start === 0) break; } else { w += cw; end++; }
+    } else if (start > 0) {
+      const cw = glyphW(text[start - 1]);
+      if (cw > room && end === text.length) break;
+      w += cw; start--;
+    } else if (end === text.length) break;
+    grow = !grow;
+    if (start === 0 && end === text.length) break;
+  }
+  return (start > 0 ? "\u2039" : "") + text.slice(start, caret) + "|" + text.slice(caret, end) + (end < text.length ? "\u203a" : "");
 }
-export function gcRegisterSend(fn: (t: string) => Promise<boolean>) {
-  composeSend = fn;
+function mirrorCompose() { composeMirror?.(); }
+function syncFromInput(el: HTMLInputElement) {
+  composeText = el.value;
+  composeCaret = el.selectionStart ?? el.value.length;
+  mirrorCompose();
 }
-export async function gcSendCompose(): Promise<boolean> {
-  const t = composeText.trim();
-  if (!t || !composeSend) return false;
-  const ok = await composeSend(t);
-  if (ok) { composeText = ""; composeMirror?.(); }
-  return ok;
+function ensureComposeInput() {
+  if (composeInput) return composeInput;
+  const el = document.createElement("input");
+  el.type = "text";
+  el.autocapitalize = "off"; el.autocomplete = "off"; el.spellcheck = false;
+  Object.assign(el.style, {
+    position: "fixed", left: "0", top: "0", width: "1px", height: "1px",
+    opacity: "0", border: "0", padding: "0", background: "transparent", color: "transparent",
+  } as CSSStyleDeclaration);
+  document.body.appendChild(el);
+  const word = (fwd: boolean) => {
+    const s = el.value; let pos = el.selectionStart ?? s.length; const end = el.selectionEnd ?? pos;
+    if (fwd) { const from = Math.max(pos, end); const m = s.slice(from).match(/[\w\u00C0-\u024F][^\s]*/); return m ? from + (m.index ?? 0) + m[0].length : s.length; }
+    let i = Math.min(pos, end) - 1;
+    while (i > 0 && /\s/.test(s[i])) i--;
+    while (i > 0 && !/\s/.test(s[i - 1])) i--;
+    return Math.max(0, i);
+  };
+  el.addEventListener("input", () => syncFromInput(el));
+  el.addEventListener("keyup", () => syncFromInput(el));
+  el.addEventListener("click", () => syncFromInput(el));
+  el.addEventListener("keydown", (e: KeyboardEvent) => {
+    const s = el.value; let pos = el.selectionStart ?? s.length; const end = el.selectionEnd ?? pos;
+    const jump = e.ctrlKey || e.metaKey;
+    let handled = true;
+    if (e.key === "ArrowLeft") pos = jump ? word(false) : Math.max(0, Math.min(pos, end) - 1);
+    else if (e.key === "ArrowRight") pos = jump ? word(true) : Math.min(s.length, Math.max(pos, end) + 1);
+    else if (e.key === "Home") pos = 0;
+    else if (e.key === "End") pos = s.length;
+    else if (e.key === "Delete" && jump) { const to = pos === end ? word(true) : Math.max(pos, end); el.setRangeText("", Math.min(pos, end), to, "end"); pos = Math.min(pos, end); el.dispatchEvent(new Event("input")); }
+    else if (e.key === "Backspace" && jump) { const from = pos === end ? word(false) : Math.min(pos, end); el.setRangeText("", from, Math.max(pos, end), "end"); pos = from; el.dispatchEvent(new Event("input")); }
+    else if (e.key === "Enter") {
+      e.preventDefault();
+      const t = el.value.trim();
+      if (t && composeSend) { el.value = ""; composeText = ""; composeCaret = 0; mirrorCompose(); void composeSend(t); }
+      return;
+    } else if (e.key === "Escape") { el.value = ""; composeText = ""; composeCaret = 0; mirrorCompose(); return; }
+    else handled = false;
+    if (handled) { e.preventDefault(); el.setSelectionRange(pos, pos); syncFromInput(el); }
+  });
+  el.addEventListener("blur", () => { if (composeArmed) setTimeout(() => el.focus(), 50); });
+  composeInput = el;
+  return el;
 }
+export function gcArmCompose(on: boolean) {
+  composeArmed = on;
+  const el = ensureComposeInput();
+  if (on) { el.focus({ preventScroll: true }); if (!composePoll) composePoll = setInterval(() => { if (composeArmed) syncFromInput(el); }, 80); }
+  else { try { el.blur(); } catch {} if (composePoll) { clearInterval(composePoll); composePoll = null; } }
+}
+export function gcRegisterSend(fn: (t: string) => Promise<boolean>) { composeSend = fn; }
 
 
 
@@ -3740,7 +3813,7 @@ export function GlassesUI({
       composeMirror = () => {
         const b = glassesBridgeRef.current;
         if (!b) return;
-        const txt = composeText ? truncatePx(composeText, 500) + "|" : "Type on your phone or tap to record or transcribe";
+        const txt = composeText ? composeWindow() : "Type on your phone or tap to record or transcribe";
         void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt, textColor: composeText ? 4 : 0 }));
       };
       // pad so the name starts clear of the avatar image (x 70..104)
@@ -3763,7 +3836,7 @@ export function GlassesUI({
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, 1),
         mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
         mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, slots[2].th, slots[2].time, 0, 1),
-        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? truncatePx(composeText, 500) + "|" : "Type on your phone or tap to record or transcribe", textColor: composeText ? 4 : 0, zOrderIndex: 11 }),
+        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? composeWindow() : "Type on your phone or tap to record or transcribe", textColor: composeText ? 4 : 0, zOrderIndex: 11 }),
       ];
 
       if (needRebuild) {
@@ -3778,6 +3851,7 @@ export function GlassesUI({
         }));
         glassesLayoutRef.current = "messages";
         msgLastContentRef.current = {};
+        gcArmCompose(true);
         console.log("[msg] rebuild:", rb ? "ok" : "FAILED", "items", items.length, "focus", layout.focus);
         try {
           const bytes = await renderTopAvatar(chat, beeperBaseRef.current);
@@ -3901,6 +3975,8 @@ export function GlassesUI({
           }),
         );
         glassesLayoutRef.current = "chats";
+        gcArmCompose(false);
+        composeMirror = null;
         console.log("[chats] rebuild:", rb ? "ok" : "FAILED", "page", page + 1, "/", totalPages);
         try {
           const bytes = await getSpineBytes();
