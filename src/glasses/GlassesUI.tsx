@@ -979,21 +979,16 @@ function computeMsgLayout(
     const b = Math.max(0, Math.min(block, blocks - 1));
     return { focus: true, items: [{ msg: selMsg, lines: selLines.slice(b * MSG_MAX_LINES, (b + 1) * MSG_MAX_LINES), block: b, blocks }] };
   }
-  // dynamic stack: window ends AT the selection (it is always shown first,
-  // older neighbours fill the rest and are skipped when they don't fit —
-  // bug 01.11.: oldest-first stacking dropped the newest message when older
-  // ones filled the area before it was reached)
+  // fixed window: the selection + up to 2 older, always rendered (no
+  // fit-based skipping — that made the item count oscillate between polls
+  // and forced a full page rebuild = flicker every 1-2s while idle)
   const win = messages.slice(Math.max(0, sel - 2), sel + 1);
-  const items: MsgItem[] = [];
-  let used = 0;
-  for (let i = win.length - 1; i >= 0; i--) {
-    const m = win[i];
-    const lines = wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14);
-    const h = lines.length * MSG_LINE_H + MSG_RESERVE;
-    if (used + h + (items.length ? MSG_GAP : 0) > MSG_AREA_H) continue;
-    items.unshift({ msg: m, lines, block: 0, blocks: 1 });
-    used += h + (items.length > 1 ? MSG_GAP : 0);
-  }
+  const items: MsgItem[] = win.map((m) => ({
+    msg: m,
+    lines: wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14),
+    block: 0,
+    blocks: 1,
+  }));
   return { focus: false, items };
 }
 
@@ -3847,24 +3842,24 @@ export function GlassesUI({
         const timeLines = [tag, formatTime(it.msg.timestamp)];
         if (it.blocks > 1) timeLines.push(`${it.block + 1}/${it.blocks}`);
         const timeTxt = timeLines.filter(Boolean).join("\n");
-        const bh = layout.focus ? MSG_AREA_H : it.lines.length * MSG_LINE_H + MSG_RESERVE;
+        // fixed slot height in normal mode (3 equal slots) so the shape never
+        // changes between polls; focus mode uses the whole area
+        const bh = layout.focus ? MSG_AREA_H : 74;
         const bx = isMine ? 0 : TIME_W + 4;
         const tx = isMine ? 574 - TIME_W : 0;
-        const th = timeLines.filter(Boolean).length * 30 + 8; // date/time/block lines + reserve
+        const th = 40;
         return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, show: true };
       });
-      // stack visible slots top-down at their natural heights; center time
+      // fixed top-aligned slots (74px each) — positions independent of content
       let y = MSG_AREA_Y;
       for (const s of slots) {
         if (!s.show) continue;
         s.y = y;
         s.timeY = y + Math.max(0, Math.round((s.h - s.th) / 2));
-        // advance past whichever is taller — a date-tagged time column must
-        // not bleed into the next slot
-        y += Math.max(s.h, s.th) + MSG_GAP;
+        y += 74 + MSG_GAP;
       }
-      // shape = focus + sender pattern + slot heights (positions can't upgrade)
-      const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}:${s.th}` : "x")).join("");
+      // shape = focus + sender pattern only (stable across polls → upgrades)
+      const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? (s.isMine ? "m" : "i") : "x")).join("");
       msgTopNameRef.current = chatName;
       // phone typing mirrors live into the glasses input container
       composeMirror = () => {
