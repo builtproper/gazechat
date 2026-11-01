@@ -3938,7 +3938,7 @@ export function GlassesUI({
       // Phone-style: incoming → time LEFT, bubble right; mine → bubble left,
       // time RIGHT. Full-width bubbles. Top bar is ONE text container
       // (clock | <spaces> name) with the avatar image overlaid on the spaces.
-      const TIME_W = 66, BUB_W = 574 - TIME_W - 4;
+      const TIME_W = MSG_TIME_W, BUB_W = 574 - TIME_W - 4;
       const slots = [0, 1, 2].map((i) => {
         const it = items[i];
         if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y, h: 40, th: 40, timeY: MSG_AREA_Y, bx: 0, tx: 0, isMine: false, bright: 3, show: false };
