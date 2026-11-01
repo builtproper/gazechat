@@ -918,7 +918,8 @@ function msgBubbleText(msg: BeeperMessage, all: BeeperMessage[]): string {
   let t = stripUnsupportedChars(formatMessageText(msg)).replace(/\r/g, "").trim();
   if (!t || t === "[media]") {
     const ty = (msg.type || "").toUpperCase();
-    t = ty === "IMAGE" ? "[Photo]" : ty === "VIDEO" ? "[Video]" : ty === "AUDIO" ? "[Audio]" : ty === "VOICE" ? "[Voice]" : ty === "FILE" ? "[File]" : "[media]";
+    const fname = (msg.attachments as any[])?.[0]?.filename || (msg.attachments as any[])?.[0]?.fileName;
+    t = ty === "IMAGE" ? "[Photo]" : ty === "VIDEO" ? "[Video]" : ty === "AUDIO" ? "[Audio]" : ty === "VOICE" ? "[Voice]" : ty === "FILE" ? (fname ? `[File: ${fname}]` : "[File]") : "[media]";
   }
   if (msg.linkedMessageID) {
     const linked = all.find((m) => m.id === msg.linkedMessageID);
@@ -1006,9 +1007,20 @@ function getMicIcon(): number[] {
 // glasses input container (full brightness while typing, dim hint otherwise) ─
 let composeText = "";
 let composeMirror: (() => void) | null = null;
+let composeSend: ((t: string) => Promise<boolean>) | null = null;
 export function gcSetComposeText(t: string) {
   composeText = t;
   composeMirror?.();
+}
+export function gcRegisterSend(fn: (t: string) => Promise<boolean>) {
+  composeSend = fn;
+}
+export async function gcSendCompose(): Promise<boolean> {
+  const t = composeText.trim();
+  if (!t || !composeSend) return false;
+  const ok = await composeSend(t);
+  if (ok) { composeText = ""; composeMirror?.(); }
+  return ok;
 }
 
 
@@ -1853,6 +1865,7 @@ export function GlassesUI({
   const chatFilterRef = useRef<"normal" | "low" | "archived">("normal");
   const msgBlockRef = useRef<number>(0);
   const msgTopNameRef = useRef<string>("");
+  const msgLastContentRef = useRef<Record<number, string>>({});
   const msgSigRef = useRef<string>("");
   const chatPageSigRef = useRef<string>("");
   const chatSelSigRef = useRef<string>("");
@@ -2987,6 +3000,7 @@ export function GlassesUI({
             updates.currentScreen = "messages";
             updates.selectedChat = chat.id;
             updates.isLoading = true;
+            updates.messages = []; // drop previous chat's messages → no blink
             updates.selectedMessageIndex = 0;
             msgBlockRef.current = 0;
             glassesLayoutRef.current = null; // force messages rebuild
@@ -3700,7 +3714,7 @@ export function GlassesUI({
       const TIME_W = 54, BUB_W = 574 - TIME_W - 4;
       const slots = [0, 1, 2].map((i) => {
         const it = items[i];
-        if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y + i * 80, h: 74, timeY: MSG_AREA_Y + i * 80 + 18, bx: 0, tx: 0, isMine: false, show: false };
+        if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y + i * 80, h: 74, th: 40, timeY: MSG_AREA_Y + i * 80 + 18, bx: 0, tx: 0, isMine: false, show: false };
         const isMine = !!it.msg.isSender;
         const timeTxt = it.blocks > 1
           ? `${formatTime(it.msg.timestamp)}\n${it.block + 1}/${it.blocks}`
@@ -3708,25 +3722,26 @@ export function GlassesUI({
         const bh = layout.focus ? MSG_AREA_H : it.lines.length * MSG_LINE_H + MSG_RESERVE;
         const bx = isMine ? 0 : TIME_W + 4;
         const tx = isMine ? 574 - TIME_W : 0;
-        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, timeY: 0, bx, tx, isMine, show: true };
+        const th = it.blocks > 1 ? 68 : 40; // 2 lines + reserve when X/Y follows
+        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, show: true };
       });
       // stack visible slots top-down at their natural heights; center time
       let y = MSG_AREA_Y;
       for (const s of slots) {
         if (!s.show) continue;
         s.y = y;
-        s.timeY = y + Math.round((s.h - 40) / 2);
+        s.timeY = y + Math.max(0, Math.round((s.h - s.th) / 2));
         y += s.h + MSG_GAP;
       }
       // shape = focus + sender pattern + slot heights (positions can't upgrade)
-      const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}` : "x")).join("");
+      const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}:${s.th}` : "x")).join("");
       msgTopNameRef.current = chatName;
       // phone typing mirrors live into the glasses input container
       composeMirror = () => {
         const b = glassesBridgeRef.current;
         if (!b) return;
-        const txt = composeText ? truncatePx(composeText, 500) + "|" : "Type on your phone to type a message.";
-        void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt, textColor: composeText ? undefined : 0 }));
+        const txt = composeText ? truncatePx(composeText, 500) + "|" : "Type on your phone or tap to record or transcribe";
+        void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt, textColor: composeText ? 4 : 0 }));
       };
       // pad so the name starts clear of the avatar image (x 70..104)
       const lead = `${clockText()} |`;
@@ -3741,14 +3756,14 @@ export function GlassesUI({
         new TextContainerProperty({ containerID: id, containerName: name, xPosition: x, yPosition: sy, width: w, height: sh, paddingLength: 2, borderWidth: border, borderColor: border ? 3 : 0, borderRadius: border ? 6 : 0, content, textColor: bright, isEventCapture: capture ? 1 : 0, zOrderIndex: id });
 
       const textObject = [
-        new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 2, yPosition: 2, width: 570, height: 38, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 1, zOrderIndex: 1 }),
+        new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 1, yPosition: 2, width: 574, height: 38, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 1, zOrderIndex: 1 }),
         mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
-        mk(3, "time0", slots[0].tx, TIME_W, slots[0].timeY, 40, slots[0].time, 0, 1),
+        mk(3, "time0", slots[0].tx, TIME_W, slots[0].timeY, slots[0].th, slots[0].time, 0, 1),
         mk(4, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
-        mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, 40, slots[1].time, 0, 1),
+        mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, 1),
         mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
-        mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, 40, slots[2].time, 0, 1),
-        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? truncatePx(composeText, 500) + "|" : "Type on your phone to type a message.", textColor: composeText ? undefined : 0, zOrderIndex: 11 }),
+        mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, slots[2].th, slots[2].time, 0, 1),
+        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? truncatePx(composeText, 500) + "|" : "Type on your phone or tap to record or transcribe", textColor: composeText ? 4 : 0, zOrderIndex: 11 }),
       ];
 
       if (needRebuild) {
@@ -3762,6 +3777,7 @@ export function GlassesUI({
           listObject: [],
         }));
         glassesLayoutRef.current = "messages";
+        msgLastContentRef.current = {};
         console.log("[msg] rebuild:", rb ? "ok" : "FAILED", "items", items.length, "focus", layout.focus);
         try {
           const bytes = await renderTopAvatar(chat, beeperBaseRef.current);
@@ -3770,13 +3786,17 @@ export function GlassesUI({
         } catch (e) { console.warn("[msg] top avatar failed:", e); }
         return;
       }
-      const upgrades = [
-        [1, "topbar", textObject[0].content],
-        [2, "bub0", textObject[1].content], [3, "time0", textObject[2].content],
-        [4, "bub1", textObject[3].content], [5, "time1", textObject[4].content],
-        [6, "bub2", textObject[5].content], [7, "time2", textObject[6].content],
-      ] as const;
-      for (const [id, name, content] of upgrades) {
+      // upgrade ONLY containers whose content actually changed — upgrading an
+      // unchanged container makes the firmware nudge its internal scroll
+      const defs: Array<[number, string, string]> = [
+        [1, "topbar", textObject[0].content ?? ""], [2, "bub0", textObject[1].content ?? ""],
+        [3, "time0", textObject[2].content ?? ""], [4, "bub1", textObject[3].content ?? ""],
+        [5, "time1", textObject[4].content ?? ""], [6, "bub2", textObject[5].content ?? ""],
+        [7, "time2", textObject[6].content ?? ""],
+      ];
+      for (const [id, name, content] of defs) {
+        if (msgLastContentRef.current[id] === content) continue;
+        msgLastContentRef.current[id] = content;
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: name, content }));
       }
     },
@@ -4009,6 +4029,7 @@ export function GlassesUI({
         if (disposed) return;
 
         glassesBridgeRef.current = bridge;
+        gcRegisterSend(async (t: string) => sendMessage(t));
         unsubscribe = bridge.onEvenHubEvent((event: EvenHubEvent) => {
           if (nativeOverlayScreenRef.current) {
             return;
