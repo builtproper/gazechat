@@ -895,7 +895,42 @@ function clockText(): string {
 }
 
 // ── message view layout (dynamic containers, max 3 messages/page) ─────────
-const MSG_TIME_W = 66;
+// Beeper reports reactions natively (message.reactions[].reactionKey).
+// The glasses font has no emoji glyphs, so common reactions map to short
+// ASCII markers shown after the time. Unknown emoji fall back to "*".
+const REACTION_MARKERS: Record<string, string> = {
+  '\u{1F44D}': "+1",   // thumbs up
+  '\u{1F44E}': "-1",   // thumbs down
+  '\u{2764}\uFE0F?': "LO",  // heavy heart
+  '\u{2764}': "LO",
+  '\u{1F602}': "lol",  // tears of joy
+  '\u{1F62E}': "omg",  // open mouth
+  '\u{1F622}': "sad",  // crying
+  '\u{1F64F}': "pray", // folded hands
+  '\u{1F525}': "fire", // flame
+  '\u{1F389}': "yay",  // party
+  '\u{1F621}': "angry",
+  '\u{1F44F}': "clap",
+  '\u{1F914}': "hmm",
+  '\u{1F44B}': "hi",
+  '\u{2705}': "ok",    // check
+  '\u{274C}': "no",
+};
+function reactionText(m: BeeperMessage): string {
+  const rs = m.reactions;
+  if (!Array.isArray(rs) || rs.length === 0) return "";
+  const counts = new Map<string, number>();
+  for (const r of rs) {
+    const key = (r as { reactionKey?: string; emoji?: unknown }).reactionKey
+      ?? (typeof (r as { emoji?: unknown }).emoji === "string" ? (r as { emoji: string }).emoji : "");
+    if (!key) continue;
+    const marker = REACTION_MARKERS[key] || "*";
+    counts.set(marker, (counts.get(marker) || 0) + 1);
+  }
+  const parts = [...counts.entries()].map(([mk, n]) => (n > 1 ? `${mk}x${n}` : mk));
+  return parts.length ? " " + parts.join(" ") : "";
+}
+const MSG_TIME_W = 71;
 // bubble width shared by wrap calc and layout (full width minus time column)
 const MSG_BUB_W = 574 - MSG_TIME_W - 4;
 function msgGeom(_isMine: boolean) {
@@ -3421,7 +3456,12 @@ export function GlassesUI({
       }
 
       const result = await beeper.listMessages(chatId);
-      const messages = result.messages.reverse();
+      // REACTION messages are not bubbles: Beeper marks them isHidden and
+      // attaches the reaction to the ORIGINAL message (reactions[]). Show
+      // them as a marker after the time instead of a "[media]" bubble.
+      const messages = result.messages
+        .filter((m) => (m.type || "").toUpperCase() !== "REACTION" && !(m as { isHidden?: boolean }).isHidden)
+        .reverse();
       const finalMessages = messages;
       const initialScroll = Math.max(0, finalMessages.length - 1);
 
@@ -3904,7 +3944,8 @@ export function GlassesUI({
         if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y, h: 40, th: 40, timeY: MSG_AREA_Y, bx: 0, tx: 0, isMine: false, bright: 3, show: false };
         const isMine = !!it.msg.isSender;
         const tag = msgDateTag(it.msg.timestamp);
-        const timeLines = [tag, formatTime(it.msg.timestamp)];
+        const rx = reactionText(it.msg);
+        const timeLines = [tag, formatTime(it.msg.timestamp) + rx];
         if (it.blocks > 1) timeLines.push(`${it.block + 1}/${it.blocks}`);
         const timeTxt = timeLines.filter(Boolean).join("\n");
         // natural height per message (pages are packed by height); focus mode
