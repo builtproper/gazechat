@@ -201,25 +201,25 @@ export default function App() {
     }
   }, [selectedAccount, selectedChat, currentView, isAuthenticated])
 
-  const handleSaveSettings = useCallback(async (baseUrl: string, token: string) => {
+  const handleSaveSettings = useCallback(async (baseUrl: string, token: string): Promise<boolean> => {
     console.log('[App] Saving settings...')
     setError(null)
-    await updateApiConfig(baseUrl, token)
-    console.log('[App] Settings saved successfully')
-    setApiConfig({ baseUrl, token })
-    setShowSettings(false)
 
     try {
       const connectedConfig = await connectWithDiscoveryFallback(baseUrl, token)
+      await updateApiConfig(connectedConfig.baseUrl, connectedConfig.token)
+      console.log('[App] Settings saved successfully')
       setApiConfig(connectedConfig)
       setIsAuthenticated(true)
+      setShowSettings(false)
+      return true
     } catch (err) {
+      // do NOT persist a config that failed — the caller shows a warning and
+      // lets the user fix the values or discard
       console.error('[App] Connection failed:', err)
-      await clearFailedBeeperConnection(
-        'Failed to connect. Use Find computer or check your token.',
-      )
+      return false
     }
-  }, [clearFailedBeeperConnection, connectWithDiscoveryFallback])
+  }, [connectWithDiscoveryFallback])
 
   const handleSaveSpeechSettings = useCallback(async (baseUrl: string, token: string, model: string) => {
     console.log('[App] Saving speech settings...')

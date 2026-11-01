@@ -308,7 +308,7 @@ interface DevModeUIProps {
   onLogout?: () => void;
   onOpenSettings?: () => void;
   onCloseSettings?: () => void;
-  onSaveSettings?: (baseUrl: string, token: string) => void;
+  onSaveSettings?: (baseUrl: string, token: string) => Promise<boolean>;
   onSaveSpeechSettings?: (
     baseUrl: string,
     token: string,
@@ -601,7 +601,7 @@ function SettingsForm({
   onSave,
   savedConfig,
 }: {
-  onSave: (baseUrl: string, token: string) => void;
+  onSave: (baseUrl: string, token: string) => Promise<boolean>;
   savedConfig?: { baseUrl: string; token: string } | null;
   defaultOpen?: boolean;
 }) {
@@ -652,11 +652,16 @@ function SettingsForm({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [saving, setSaving] = useState(false);
+  const [connectError, setConnectError] = useState<string | null>(null);
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (baseUrl.trim() && token.trim()) {
-      onSave(baseUrl.trim(), token.trim());
-    }
+    if (!baseUrl.trim() || !token.trim() || saving) return;
+    setSaving(true);
+    setConnectError(null);
+    const ok = await onSave(baseUrl.trim(), token.trim());
+    setSaving(false);
+    if (!ok) setConnectError("Server not reachable — nothing was saved. Check the address and token.");
   };
 
   const discoveryStatus = getDiscoveryStatusMessage(
@@ -938,11 +943,17 @@ function SettingsForm({
             <button
               type="submit"
               className={styles.loginButton}
-              disabled={!baseUrl.trim() || !token.trim() || isFindingComputer}
+              disabled={!baseUrl.trim() || !token.trim() || isFindingComputer || saving}
             >
-              Connect
+              {saving ? "Testing..." : "Connect"}
             </button>
           </div>
+
+          {connectError && (
+            <p style={{ color: "var(--color-tc-red)", fontSize: "0.85rem", marginTop: "0.6rem", textAlign: "center" }}>
+              {connectError}
+            </p>
+          )}
 
           <p className={styles.helpText}>
             Need to use the app away from home?{" "}
@@ -999,9 +1010,11 @@ type SettingsTab = "beeper" | "speech";
 function BeeperSettingsPane({
   onSave,
   savedConfig,
+  onClose,
 }: {
-  onSave: (baseUrl: string, token: string) => void;
+  onSave: (baseUrl: string, token: string) => Promise<boolean>;
   savedConfig?: { baseUrl: string; token: string } | null;
+  onClose?: () => void;
 }) {
   const [baseUrl, setBaseUrl] = useState(
     savedConfig?.baseUrl || "http://localhost:23373",
@@ -1041,11 +1054,15 @@ function BeeperSettingsPane({
     }
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const [saving, setSaving] = useState(false);
+  const [connectFailed, setConnectFailed] = useState(false);
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (baseUrl.trim() && token.trim()) {
-      onSave(baseUrl.trim(), token.trim());
-    }
+    if (!baseUrl.trim() || !token.trim() || saving) return;
+    setSaving(true);
+    const ok = await onSave(baseUrl.trim(), token.trim());
+    setSaving(false);
+    if (!ok) setConnectFailed(true);
   };
 
   return (
@@ -1075,7 +1092,7 @@ function BeeperSettingsPane({
           </button>
         </div>
         <span className={styles.hint}>
-          The ip and port where your Beeper Desktop app is running
+          The ip:port or url where your Beeper Desktop app is running
         </span>
         {getDiscoveryStatusMessage(
           isFindingComputer,
@@ -1134,10 +1151,29 @@ function BeeperSettingsPane({
       </p>
 
       <div className={styles.modalActions}>
-        <button type="submit" className={styles.saveButton}>
-          Save & Connect
+        <button type="submit" className={styles.saveButton} disabled={saving}>
+          {saving ? "Testing..." : "Test & Save"}
         </button>
       </div>
+
+      {connectFailed && (
+        <div className={styles.modalOverlay} style={{ position: "fixed" }}>
+          <div className={styles.loginCard} style={{ background: "var(--color-bc-1st)", border: "1px solid var(--color-bc-4th)", borderRadius: 12, padding: "1.5rem", maxWidth: 340, textAlign: "center" }}>
+            <h2 style={{ color: "var(--color-tc-red)", fontSize: "1.1rem" }}>Server not reachable</h2>
+            <p style={{ color: "var(--color-tc-2nd)", fontSize: "0.9rem", margin: "0.8rem 0" }}>
+              Beeper could not be reached with these settings. Nothing was saved.
+            </p>
+            <div style={{ display: "flex", gap: "0.6rem", justifyContent: "center" }}>
+              <button className={styles.saveButton} onClick={() => setConnectFailed(false)}>
+                Go back &amp; fix
+              </button>
+              <button className={styles.findComputerButton} onClick={() => { setConnectFailed(false); onClose?.(); }}>
+                Close &amp; discard
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </form>
   );
 }
@@ -1299,7 +1335,7 @@ function SettingsModal({
   speechConfig,
   onClose,
 }: {
-  onSave: (baseUrl: string, token: string) => void;
+  onSave: (baseUrl: string, token: string) => Promise<boolean>;
   onSaveSpeech: (baseUrl: string, token: string, model: string) => void;
   apiConfig: { baseUrl: string; token: string } | null;
   speechConfig: SpeechApiConfig | null;
@@ -1339,7 +1375,7 @@ function SettingsModal({
         </div>
 
         {activeTab === "beeper" ? (
-          <BeeperSettingsPane onSave={onSave} savedConfig={apiConfig} />
+          <BeeperSettingsPane onSave={onSave} savedConfig={apiConfig} onClose={onClose} />
         ) : (
           <SpeechSettingsPane onSave={onSaveSpeech} speechConfig={speechConfig} />
         )}
