@@ -4098,9 +4098,9 @@ export function GlassesUI({
       if (snapshot.currentScreen === "chats") {
         await renderChatsPage(bridge, snapshot, nav);
       } else if (snapshot.currentScreen === "messages") {
-        // keep the chat list on screen until the first messages arrive —
-        // rendering a loading placeholder caused a wasted rebuild (~2s)
-        if (snapshot.isLoading && snapshot.messages.length === 0) return;
+        // switch to the messages frame IMMEDIATELY on tap (it shows
+        // "Loading messages…" inside) — keeping the chat list visible until
+        // the data arrived made the list flash right before the switch
         await renderMessagesPage(bridge, snapshot, nav);
       } else {
         const lines = getDisplayLines(snapshot, nav);
