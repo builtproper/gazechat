@@ -901,8 +901,8 @@ function clockText(): string {
 function reactionText(m: BeeperMessage): string {
   const rs = m.reactions;
   if (!Array.isArray(rs) || rs.length === 0) return "";
-  // show only ONE reaction (the last = newest Beeper appends); the G2 firmware
-  // renders common emoji natively (verified: 😀 ❤), unknown glyphs are skipped.
+  // show only ONE reaction (the last = newest Beeper appends); pass the emoji
+  // through 1:1 — the firmware renders what it can, skips what it can't.
   const last = rs[rs.length - 1] as { reactionKey?: string; emoji?: unknown };
   const key = last.reactionKey
     ?? (typeof last.emoji === "string" ? last.emoji : "");
@@ -3644,12 +3644,14 @@ export function GlassesUI({
               const nb = blocksOf(messages[focus]);
               if (down && newBlock < nb - 1) newBlock++;
               else if (!down && newBlock > 0) newBlock--;
-              else if (down) newFocus = focus < messages.length - 1 ? focus + 1 : -1; // → mic
+              else if (down) { newFocus = focus < messages.length - 1 ? focus + 1 : -1; newBlock = newFocus >= 0 ? Math.max(0, blocksOf(messages[newFocus]) - 1) : 0; } // → next msg / mic
               else { const pi = pages.indexOf(p); newFocus = pi < pages.length - 1 ? pages[pi + 1].end : focus; }
             } else if (down) {
+              // walk toward the mic one message at a time so you can always
+              // return to the input without re-scrolling the whole thread
               if (focus < 0) { newFocus = -1; }
-              else if (focus < p.end) { newFocus = focus + 1; newBlock = 0; }
-              else { const pi = pages.indexOf(p); newFocus = pi === 0 ? -1 : pages[pi - 1].end; newBlock = 0; }
+              else if (focus < messages.length - 1) { newFocus = focus + 1; newBlock = 0; }
+              else { newFocus = -1; } // newest message → mic
               if (newFocus >= 0) newBlock = Math.max(0, blocksOf(messages[newFocus]) - 1);
             } else {
               // up
@@ -3658,13 +3660,11 @@ export function GlassesUI({
               else { const pi = pages.indexOf(p); newFocus = pi < pages.length - 1 ? pages[pi + 1].end : focus; newBlock = 0; }
             }
             newFocus = Math.max(-1, Math.min(newFocus, messages.length - 1));
-            console.log("[foc] scroll", focus, "->", newFocus, "block", newBlock, "changed", newFocus !== focus || newBlock !== msgBlockRef.current);
             if (newFocus !== focus || newBlock !== msgBlockRef.current) {
               msgBlockRef.current = newBlock;
               msgFocusRef.current = newFocus;
               // mic brightness swap rides without a rebuild
               const b = glassesBridgeRef.current;
-              console.log("[foc] mic swap: bridge", !!b, "dimNow", micDimRef.current, "->", newFocus >= 0);
               if (b && (newFocus >= 0) !== micDimRef.current) {
                 micDimRef.current = newFocus >= 0;
                 void b.updateImageRawData(new ImageRawDataUpdate({ containerID: 12, containerName: "mic", imageData: getMicIcon(micDimRef.current) }));
@@ -3942,17 +3942,23 @@ export function GlassesUI({
             ? [head, rx].filter(Boolean)
             : [tag, tstr + rx];
         if (it.blocks > 1) timeLines.push(`${it.block + 1}/${it.blocks}`);
-        const timeTxt = timeLines.filter(Boolean).join("\n");
+        const focused = focus === slotIdx[i];
+        const tlines = timeLines.filter(Boolean);
+        if (focused) {
+          const last = tlines[tlines.length - 1] ?? "";
+          if (textPx(last + " \u25C0") <= TIME_W - 4) tlines[tlines.length - 1] = last + " \u25C0";
+          else tlines.push("\u25C0");
+        }
+        const timeTxt = tlines.join("\n");
         // natural height per message (pages are packed by height); focus mode
         // gives the single message the whole area
         const bh = layout.focus ? MSG_AREA_H : it.lines.length * MSG_LINE_H + MSG_RESERVE;
         const bx = isMine ? 0 : TIME_W + 4;
         const tx = isMine ? 574 - TIME_W : 0;
-        const th = timeLines.filter(Boolean).length * MSG_LINE_H + MSG_RESERVE;
+        const th = tlines.length * MSG_LINE_H + MSG_RESERVE;
         const bright = focus === slotIdx[i] ? 4 : 2;
         return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
       });
-      console.log("[foc] render focus", focus, "slotIdx", JSON.stringify(slotIdx), "brights", slots.map((s) => s.bright).join(","));
       // stack slots top-down at their natural heights; center time beside bubble
       let y = MSG_AREA_Y;
       for (const s of slots) {
@@ -3969,7 +3975,7 @@ export function GlassesUI({
       composeMirror = () => {
         const b = glassesBridgeRef.current;
         if (!b) return;
-        const txt = composeText ? composeWindow() : "Type on your phone or tap to record or transcribe";
+        const txt = composeText ? composeWindow() : "Type on your phone or tap to record or transcribe" + (focus < 0 ? " \u25B6" : "");
         void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt, textColor: composeText ? 4 : 0 }));
       };
       // pad so the name starts clear of the avatar image (x 70..104)
@@ -3992,7 +3998,7 @@ export function GlassesUI({
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, slots[1].bright === 4 ? 2 : 1),
         mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0, slots[2].bright),
         mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, slots[2].th, slots[2].time, 0, slots[2].bright === 4 ? 2 : 1),
-        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? composeWindow() : "Type on your phone or tap to record or transcribe", textColor: composeText ? 4 : 0, zOrderIndex: 11 }),
+        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? composeWindow() : "Type on your phone or tap to record or transcribe" + (focus < 0 ? " \u25B6" : ""), textColor: composeText ? 4 : 0, zOrderIndex: 11 }),
       ];
 
       if (needRebuild) {
@@ -4029,6 +4035,7 @@ export function GlassesUI({
         [5, "time1", textObject[4].content ?? "", slots[1].bright === 4 ? 2 : 1],
         [6, "bub2", textObject[5].content ?? "", slots[2].bright],
         [7, "time2", textObject[6].content ?? "", slots[2].bright === 4 ? 2 : 1],
+        [11, "input", textObject[7].content ?? "", composeText ? 4 : 0],
       ];
       for (const [id, name, content, bright] of defs) {
         const key = `${content}@@${bright}`;
