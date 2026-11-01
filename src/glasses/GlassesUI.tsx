@@ -971,10 +971,9 @@ function computeMsgLayout(
   const sel = Math.max(0, Math.min(selIdx, messages.length - 1));
   const selMsg = messages[sel];
   const selLines = wrapToPx(msgBubbleText(selMsg, messages), msgGeom(selMsg.isSender).bubbleW - 14);
-  const selH = selLines.length * MSG_LINE_H + MSG_RESERVE;
-  // focus (single, paginated) when the selected message alone is too tall for
-  // the area, or when it is a media message (images need the full height)
-  if (selH > MSG_AREA_H || isMediaMsg(selMsg)) {
+  // focus (single, paginated) when the selected message needs more than its
+  // 62px slot (2 lines), or when it is a media message (full height)
+  if (selLines.length > 2 || isMediaMsg(selMsg)) {
     const blocks = Math.max(1, Math.ceil(selLines.length / MSG_MAX_LINES));
     const b = Math.max(0, Math.min(block, blocks - 1));
     return { focus: true, items: [{ msg: selMsg, lines: selLines.slice(b * MSG_MAX_LINES, (b + 1) * MSG_MAX_LINES), block: b, blocks }] };
@@ -985,7 +984,7 @@ function computeMsgLayout(
   const win = messages.slice(Math.max(0, sel - 2), sel + 1);
   const items: MsgItem[] = win.map((m) => ({
     msg: m,
-    lines: wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14),
+    lines: wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14).slice(0, 2),
     block: 0,
     blocks: 1,
   }));
@@ -3123,7 +3122,7 @@ export function GlassesUI({
             updates.messages = []; // drop previous chat's messages → no blink
             updates.selectedMessageIndex = 0;
             msgBlockRef.current = 0;
-            glassesLayoutRef.current = null; // force messages rebuild
+            msgSigRef.current = ""; // force the messages page to rebuild on render
             // messageScrollOffset will be set to max (bottom) in loadMessages
 
             void loadMessages(chat.id);
@@ -3843,8 +3842,9 @@ export function GlassesUI({
         if (it.blocks > 1) timeLines.push(`${it.block + 1}/${it.blocks}`);
         const timeTxt = timeLines.filter(Boolean).join("\n");
         // fixed slot height in normal mode (3 equal slots) so the shape never
-        // changes between polls; focus mode uses the whole area
-        const bh = layout.focus ? MSG_AREA_H : 74;
+        // changes between polls; focus mode uses the whole area.
+        // 3×62 + 2×6 gap = 198 ≤ MSG_AREA_H(200) → never reaches the input bar
+        const bh = layout.focus ? MSG_AREA_H : 62;
         const bx = isMine ? 0 : TIME_W + 4;
         const tx = isMine ? 574 - TIME_W : 0;
         const th = 40;
@@ -3856,7 +3856,7 @@ export function GlassesUI({
         if (!s.show) continue;
         s.y = y;
         s.timeY = y + Math.max(0, Math.round((s.h - s.th) / 2));
-        y += 74 + MSG_GAP;
+        y += 62 + MSG_GAP;
       }
       // shape = focus + sender pattern only (stable across polls → upgrades)
       const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? (s.isMine ? "m" : "i") : "x")).join("");
