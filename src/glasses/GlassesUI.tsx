@@ -962,20 +962,37 @@ function isMediaMsg(m: BeeperMessage): boolean {
 function msgLineCount(m: BeeperMessage, all: BeeperMessage[]): number {
   return wrapToPx(msgBubbleText(m, all), msgGeom(m.isSender).bubbleW - 14).length;
 }
-// a message gets a page for itself when it's media or longer than 2 lines
-function isTallMsg(m: BeeperMessage, all: BeeperMessage[]): boolean {
-  return isMediaMsg(m) || msgLineCount(m, all) > 2;
+// a message owns a block-paginated page when it's media or taller than the area
+function ownsPage(m: BeeperMessage, all: BeeperMessage[]): boolean {
+  return isMediaMsg(m) || msgNatH(m, all) > MSG_AREA_H;
 }
-// first index of the page whose BOTTOM is anchor: 1 tall msg, else up to 3
-function computePageStart(messages: BeeperMessage[], anchor: number): number {
-  if (anchor <= 0) return 0;
-  if (isTallMsg(messages[anchor], messages)) return anchor;
-  if (anchor >= 1 && isTallMsg(messages[anchor - 1], messages)) return anchor - 1;
-  return Math.max(0, anchor - 2);
+// pages pack by NATURAL HEIGHT (real data: >2-line messages are common, so
+// count-based grouping pushed nearly everything into its own full page).
+// A message that alone exceeds the area gets its own block-paginated page.
+interface MsgPage { start: number; end: number }
+const msgNatH = (m: BeeperMessage, all: BeeperMessage[]) =>
+  msgLineCount(m, all) * MSG_LINE_H + MSG_RESERVE;
+function buildMsgPages(messages: BeeperMessage[]): MsgPage[] {
+  const pages: MsgPage[] = [];
+  let i = messages.length - 1;
+  while (i >= 0) {
+    if (ownsPage(messages[i], messages)) { pages.push({ start: i, end: i }); i--; continue; }
+    let s = i, total = msgNatH(messages[i], messages), count = 1;
+    while (s > 0 && count < 3) {
+      const ph = msgNatH(messages[s - 1], messages);
+      if (ph > MSG_AREA_H || total + ph + MSG_GAP > MSG_AREA_H) break;
+      s--; count++; total += ph + MSG_GAP;
+    }
+    pages.push({ start: s, end: i });
+    i = s - 1;
+  }
+  return pages;
+}
+function msgPageFor(pages: MsgPage[], f: number): MsgPage {
+  return pages.find((p) => f >= p.start && f <= p.end) || pages[0];
 }
 function computeMsgLayout(
   messages: BeeperMessage[],
-  selIdx: number,
   block: number,
   loading = false,
   focusIdx = -1,
@@ -983,22 +1000,20 @@ function computeMsgLayout(
   if (messages.length === 0) {
     return { focus: false, items: [{ msg: {} as BeeperMessage, lines: [loading ? "Loading messages..." : "No messages yet - send one!"], block: 0, blocks: 1 }] };
   }
-  const sel = Math.max(0, Math.min(selIdx, messages.length - 1));
   const fi = focusIdx >= 0 ? Math.min(focusIdx, messages.length - 1) : -1;
-  const tallTarget = fi >= 0 ? messages[fi] : messages[sel];
-  // single-message page when the FOCUSED message is media or long
-  if (fi >= 0 && isTallMsg(tallTarget, messages)) {
-    const selLines = wrapToPx(msgBubbleText(tallTarget, messages), msgGeom(tallTarget.isSender).bubbleW - 14);
+  // own block-paginated page when the focused message exceeds the area
+  if (fi >= 0 && ownsPage(messages[fi], messages)) {
+    const selLines = wrapToPx(msgBubbleText(messages[fi], messages), msgGeom(messages[fi].isSender).bubbleW - 14);
     const blocks = Math.max(1, Math.ceil(selLines.length / MSG_MAX_LINES));
     const b = Math.max(0, Math.min(block, blocks - 1));
-    return { focus: true, items: [{ msg: tallTarget, lines: selLines.slice(b * MSG_MAX_LINES, (b + 1) * MSG_MAX_LINES), block: b, blocks }] };
+    return { focus: true, items: [{ msg: messages[fi], lines: selLines.slice(b * MSG_MAX_LINES, (b + 1) * MSG_MAX_LINES), block: b, blocks }] };
   }
-  // normal page: bottom = anchor (selection), top = computePageStart
-  const start = computePageStart(messages, sel);
-  const win = messages.slice(start, sel + 1);
-  const items: MsgItem[] = win.map((m) => ({
+  // the page containing the focus (mic focus → newest page)
+  const pages = buildMsgPages(messages);
+  const p = fi < 0 ? pages[0] : msgPageFor(pages, fi);
+  const items: MsgItem[] = messages.slice(p.start, p.end + 1).map((m) => ({
     msg: m,
-    lines: wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14).slice(0, 2),
+    lines: wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14),
     block: 0,
     blocks: 1,
   }));
@@ -3591,32 +3606,35 @@ export function GlassesUI({
           if (snapshot.currentScreen === "messages") {
             const messages = snapshot.messages;
             if (messages.length === 0) return nav;
-            const sel = Math.min(snapshot.messageScrollOffset, messages.length - 1);
             const focus = Math.min(msgFocusRef.current, messages.length - 1);
             const down = action.direction === "down";
-            const layout = computeMsgLayout(messages, sel, msgBlockRef.current, false, focus);
+            const pages = buildMsgPages(messages);
+            const p = focus < 0 ? pages[0] : msgPageFor(pages, focus);
+            const blocksOf = (m: BeeperMessage) =>
+              Math.max(1, Math.ceil(wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14).length / MSG_MAX_LINES));
             let newFocus = focus;
-            if (layout.focus && focus >= 0) {
+            let newBlock = msgBlockRef.current;
+            if (focus >= 0 && ownsPage(messages[focus], messages)) {
               // paging inside a tall focused message
-              const it = layout.items[0];
-              if (down && it.block + 1 < it.blocks) msgBlockRef.current = it.block + 1;
-              else if (!down && it.block > 0) msgBlockRef.current = it.block - 1;
-              else if (down) newFocus = focus + 1 <= messages.length - 1 ? focus + 1 : -1; // → mic
-              else newFocus = computePageStart(messages, focus - 1) >= 0 && focus > 0 ? computePageStart(messages, focus - 1) : focus - 1;
+              const nb = blocksOf(messages[focus]);
+              if (down && newBlock < nb - 1) newBlock++;
+              else if (!down && newBlock > 0) newBlock--;
+              else if (down) newFocus = focus < messages.length - 1 ? focus + 1 : -1; // → mic
+              else { const pi = pages.indexOf(p); newFocus = pi < pages.length - 1 ? pages[pi + 1].end : focus; }
             } else if (down) {
-              // toward the mic: focus moves down one message (or stays at mic)
-              newFocus = focus < 0 ? -1 : (focus + 1 <= messages.length - 1 ? focus + 1 : -1);
+              if (focus < 0) { newFocus = -1; }
+              else if (focus < p.end) { newFocus = focus + 1; newBlock = 0; }
+              else { const pi = pages.indexOf(p); newFocus = pi === 0 ? -1 : pages[pi - 1].end; newBlock = 0; }
+              if (newFocus >= 0) newBlock = Math.max(0, blocksOf(messages[newFocus]) - 1);
             } else {
-              // up: one message, or a full page back when at the page top
-              if (focus < 0) newFocus = sel; // mic → newest message
-              else {
-                const pageTop = computePageStart(messages, sel);
-                newFocus = focus <= pageTop ? Math.max(0, computePageStart(messages, pageTop - 1)) : focus - 1;
-              }
+              // up
+              if (focus < 0) { newFocus = p.end; newBlock = Math.max(0, blocksOf(messages[p.end]) - 1); }
+              else if (focus > p.start) { newFocus = focus - 1; newBlock = Math.max(0, blocksOf(messages[focus - 1]) - 1); }
+              else { const pi = pages.indexOf(p); newFocus = pi < pages.length - 1 ? pages[pi + 1].end : focus; newBlock = 0; }
             }
             newFocus = Math.max(-1, Math.min(newFocus, messages.length - 1));
-            if (newFocus !== focus || msgBlockRef.current !== 0) {
-              if (newFocus !== focus) msgBlockRef.current = 0;
+            if (newFocus !== focus || newBlock !== msgBlockRef.current) {
+              msgBlockRef.current = newBlock;
               msgFocusRef.current = newFocus;
               // mic brightness swap rides without a rebuild
               const b = glassesBridgeRef.current;
@@ -3870,9 +3888,8 @@ export function GlassesUI({
     async (bridge: EvenAppBridge, snapshot: AppState, _nav: GlassNavState) => {
       const chat = snapshot.chats.find((c) => c.id === snapshot.selectedChat);
       const chatName = chat ? truncatePx(chat.title, 300) : "Messages";
-      const selIdx = Math.min(snapshot.messageScrollOffset, Math.max(0, snapshot.messages.length - 1));
       const focus = Math.min(msgFocusRef.current, Math.max(0, snapshot.messages.length - 1));
-      const layout = computeMsgLayout(snapshot.messages, selIdx, msgBlockRef.current, snapshot.isLoading, focus);
+      const layout = computeMsgLayout(snapshot.messages, msgBlockRef.current, snapshot.isLoading, focus);
       const items = layout.items;
       // focused message = full brightness; others one step dimmer; mic dims
       // when a message holds the focus
@@ -3884,32 +3901,32 @@ export function GlassesUI({
       const TIME_W = 66, BUB_W = 574 - TIME_W - 4;
       const slots = [0, 1, 2].map((i) => {
         const it = items[i];
-        if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y + i * 80, h: 74, th: 40, timeY: MSG_AREA_Y + i * 80 + 18, bx: 0, tx: 0, isMine: false, bright: 3, show: false };
+        if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y, h: 40, th: 40, timeY: MSG_AREA_Y, bx: 0, tx: 0, isMine: false, bright: 3, show: false };
         const isMine = !!it.msg.isSender;
         const tag = msgDateTag(it.msg.timestamp);
         const timeLines = [tag, formatTime(it.msg.timestamp)];
         if (it.blocks > 1) timeLines.push(`${it.block + 1}/${it.blocks}`);
         const timeTxt = timeLines.filter(Boolean).join("\n");
-        // fixed slot height in normal mode (3 equal slots) so the shape never
-        // changes between polls; focus mode uses the whole area.
-        // 3×62 + 2×6 gap = 198 ≤ MSG_AREA_H(200) → never reaches the input bar
-        const bh = layout.focus ? MSG_AREA_H : 62;
+        // natural height per message (pages are packed by height); focus mode
+        // gives the single message the whole area
+        const bh = layout.focus ? MSG_AREA_H : it.lines.length * MSG_LINE_H + MSG_RESERVE;
         const bx = isMine ? 0 : TIME_W + 4;
         const tx = isMine ? 574 - TIME_W : 0;
-        const th = 40;
+        const th = timeLines.filter(Boolean).length * MSG_LINE_H + MSG_RESERVE;
         const bright = focus === slotIdx[i] ? 4 : 3;
         return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
       });
-      // fixed top-aligned slots (74px each) — positions independent of content
+      // stack slots top-down at their natural heights; center time beside bubble
       let y = MSG_AREA_Y;
       for (const s of slots) {
         if (!s.show) continue;
         s.y = y;
         s.timeY = y + Math.max(0, Math.round((s.h - s.th) / 2));
-        y += 62 + MSG_GAP;
+        y += s.h + MSG_GAP;
       }
-      // shape = focus + sender pattern only (stable across polls → upgrades)
-      const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? (s.isMine ? "m" : "i") : "x")).join("");
+      // shape = focus mode + per-slot geometry (page change → rebuild, which is
+      // correct: new messages = new content); stable within a page → upgrades
+      const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}:${s.y}` : "x")).join("");
       msgTopNameRef.current = chatName;
       // phone typing mirrors live into the glasses input container
       composeMirror = () => {

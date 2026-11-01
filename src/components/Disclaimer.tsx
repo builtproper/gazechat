@@ -16,9 +16,8 @@ export function Disclaimer({ onAcknowledge }: DisclaimerProps) {
 
         <div className={styles.content}>
           <p className={styles.text}>
-            This app is a <strong>proof of concept</strong>. It contains bugs,
-            limitations, and requires you to be able to configure an external
-            tool called <strong>Beeper Desktop</strong>.
+            This app <strong>requires</strong> you to be able to configure an
+            external tool called <strong>Beeper Desktop</strong>.
           </p>
 
           <div className={styles.highlight}>
