@@ -387,7 +387,7 @@ export function DevModeUI({
     // Add initial info
     addLog(
       "info",
-      `Message Lens Debug Console Initialized`,
+      `GazeChat Debug Console Initialized`,
       "info",
       `Origin: ${window.location.origin}`,
     );
@@ -483,7 +483,7 @@ export function DevModeUI({
               <div className={styles.networkNotice}>
                 <strong>Using a non-Tailscale address:</strong> your current
                 Beeper URL looks like <code>{configuredHostname}</code>. If you
-                want to use Message Lens away from home, follow the{" "}
+                want to use GazeChat away from home, follow the{" "}
                 <a
                   href={TAILSCALE_SETUP_URL}
                   target="_blank"
@@ -540,7 +540,7 @@ export function DevModeUI({
       {/* Footer */}
       <footer className={styles.footer}>
         <div className={styles.footerTopRow}>
-          <p>Message Lens</p>
+          <p>GazeChat</p>
           <button className={styles.settingsButton} onClick={onOpenSettings}>
             Settings
           </button>
@@ -720,7 +720,7 @@ function SettingsForm({
         <span className={styles.setupStepLabel}>Step {step} of 3</span>
         <h2>Connect Beeper Desktop</h2>
         <p>
-          Message Lens reads and sends your messages through Beeper Desktop.
+          GazeChat reads and sends your messages through Beeper Desktop.
           Beeper needs to stay open on your computer while you use the glasses.
         </p>
       </div>
@@ -769,7 +769,7 @@ function SettingsForm({
         <section className={styles.setupStepPanel}>
           <h3>Find the computer</h3>
           <p>
-            Message Lens will scan your local network for the Beeper Desktop API
+            GazeChat will scan your local network for the Beeper Desktop API
             and fill in the computer address automatically.
           </p>
 
@@ -833,7 +833,7 @@ function SettingsForm({
         <section className={styles.setupStepPanel}>
           <h3>Add the Beeper token</h3>
           <p>
-            The token lets Message Lens fetch your conversations and send
+            The token lets GazeChat fetch your conversations and send
             replies through Beeper Desktop.
           </p>
 
@@ -873,7 +873,7 @@ function SettingsForm({
               </li>
               <li>
                 <strong>Allow sensitive actions</strong> lets the token send messages
-                and modify your account. Enable it only if you want Message Lens to
+                and modify your account. Enable it only if you want GazeChat to
                 send replies, then create the token and paste it below.
               </li>
             </ol>
@@ -881,7 +881,7 @@ function SettingsForm({
 
           <p className={styles.supportNote}>
             <strong>Support note:</strong> Please do not ask the Beeper Developer
-            Community for help using Message Lens. It is for people building
+            Community for help using GazeChat. It is for people building
             integrations, not end-user support.
           </p>
 
@@ -1138,7 +1138,7 @@ function BeeperSettingsPane({
       </div>
 
       <p className={styles.helpText}>
-        Want to use Message Lens outside your home network?{" "}
+        Want to use GazeChat outside your home network?{" "}
         <a
           href={TAILSCALE_SETUP_URL}
           target="_blank"

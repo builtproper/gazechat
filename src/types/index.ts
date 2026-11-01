@@ -1,4 +1,4 @@
-// Core types for Message Lens app
+// Core types for GazeChat app
 
 export interface User {
   id: string;

@@ -21,7 +21,7 @@ import {
 } from './services'
 
 /**
- * Message Lens App
+ * GazeChat App
  * 
  * This app is designed to run in the Even App WebView.
  * It uses the Even Hub SDK to display messaging content on Even Glasses.

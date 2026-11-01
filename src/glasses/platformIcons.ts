@@ -1,5 +1,5 @@
 /**
- * Platform Icons for Message Lens
+ * Platform Icons for GazeChat
  * 
  * Tiny monochrome bitmaps for the Even G2 glasses display (576x288).
  * Icons are 16x16 pixels (1-bit per pixel) for minimal memory usage.

@@ -1,5 +1,5 @@
 /**
- * Platform Images for Message Lens
+ * Platform Images for GazeChat
  * 
  * Converts SVG messaging app icons to PNG bytes for the Even G2 glasses display.
  * Images are resized to fit the conversation row height (~40px).

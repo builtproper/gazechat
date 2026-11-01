@@ -1,5 +1,5 @@
 /**
- * Message Lens - Glasses UI Component
+ * GazeChat - Glasses UI Component
  *
  * Optimized for Even G2 display: 576x288 pixels
  * Uses full width for maximum readability.
@@ -1331,12 +1331,12 @@ function buildAccountsDisplay(
 ): DisplayLine[] {
   const lines: DisplayLine[] = [];
 
-  // Header: "Message Lens" + time (+ DEMO indicator if active)
+  // Header: "GazeChat" + time (+ DEMO indicator if active)
   const time = new Date().toLocaleTimeString([], {
     hour: "2-digit",
     minute: "2-digit",
   });
-  const title = state.demoMode ? "Lens [DEMO]" : "Message Lens";
+  const title = state.demoMode ? "GazeChat [DEMO]" : "GazeChat";
   lines.push(line(buildHeaderLine(title, time), "inverted"));
 
   // "All Chats" option
@@ -1692,7 +1692,7 @@ function buildStartupDisplay(tick: number): DisplayLine[] {
     hour: "2-digit",
     minute: "2-digit",
   });
-  lines.push(line(buildHeaderLine("Message Lens", time), "inverted"));
+  lines.push(line(buildHeaderLine("GazeChat", time), "inverted"));
   lines.push(sep());
 
   // Centered framed loading box with animated dots (fixed width, no jitter)
@@ -3537,7 +3537,7 @@ export function GlassesUI({
         case "voiceReply":
           return buildVoiceReplyDisplay(snapshot);
         default:
-          return [line("Message Lens", "inverted")];
+          return [line("GazeChat", "inverted")];
       }
     },
     [],
@@ -3783,7 +3783,7 @@ export function GlassesUI({
           borderColor: 0,
           borderRadius: 0,
           paddingLength: 6,
-          content: "Message Lens started\nPlease continue on phone",
+          content: "GazeChat started\nPlease continue on phone",
           isEventCapture: 0,
         }),
       ],

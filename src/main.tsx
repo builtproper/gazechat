@@ -23,11 +23,11 @@ console.error = (...a: unknown[]) => { _err(...a); ship('err', a) }
 
 // Global error handler for development
 window.addEventListener('error', (event) => {
-  console.error('[Message Lens] Error:', event.error)
+  console.error('[GazeChat] Error:', event.error)
 })
 
 window.addEventListener('unhandledrejection', (event) => {
-  console.error('[Message Lens] Unhandled rejection:', event.reason)
+  console.error('[GazeChat] Unhandled rejection:', event.reason)
 })
 
 const root = document.getElementById('root')
