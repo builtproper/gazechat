@@ -4101,6 +4101,7 @@ export function GlassesUI({
       const snapshot = stateRef.current;
       const nav = navRef.current;
 
+      console.log("[flush]", snapshot.currentScreen, "loading", snapshot.isLoading, "msgs", snapshot.messages.length);
       if (snapshot.currentScreen === "chats") {
         await renderChatsPage(bridge, snapshot, nav);
       } else if (snapshot.currentScreen === "messages") {
