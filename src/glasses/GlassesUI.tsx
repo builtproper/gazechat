@@ -1112,6 +1112,16 @@ export function gcFocusCompose() {
   ensureComposeInput().focus({ preventScroll: true });
 }
 export function gcRegisterSend(fn: (t: string) => Promise<boolean>) { composeSend = fn; }
+// rebind helper: call on every render so composeSend never holds a stale
+// closure (beeper/config arrive asynchronously after the first render)
+let composeSendRef: (() => (t: string) => Promise<boolean>) | null = null;
+export function gcBindSend(make: () => (t: string) => Promise<boolean>) {
+  composeSendRef = make;
+  composeSend = (t) => {
+    const fn = composeSendRef ? composeSendRef() : null;
+    return fn ? fn(t) : Promise.resolve(false);
+  };
+}
 
 
 
@@ -3412,6 +3422,8 @@ export function GlassesUI({
   }
 
   // Send message
+  gcBindSend(() => sendMessage);
+
   async function sendMessage(text: string): Promise<boolean> {
     const selectedChat = stateRef.current.selectedChat;
     if (beeper && selectedChat) {
@@ -4122,7 +4134,6 @@ export function GlassesUI({
         if (disposed) return;
 
         glassesBridgeRef.current = bridge;
-        gcRegisterSend(async (t: string) => sendMessage(t));
         unsubscribe = bridge.onEvenHubEvent((event: EvenHubEvent) => {
           if (nativeOverlayScreenRef.current) {
             return;

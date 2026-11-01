@@ -4,7 +4,9 @@ body {
 }
 
 .container {
-  height: var(--app-h, 100vh);
+  /* hardware keyboards (Clicks) don't shrink the viewport and iOS keeps
+     covering the bottom strip — reserve 200px so the footer stays visible */
+  height: calc(var(--app-h, 100vh) - 200px);
   width: 100%;
   min-width: 0;
   display: flex;
