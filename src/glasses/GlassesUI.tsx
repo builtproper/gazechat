@@ -930,7 +930,7 @@ function reactionText(m: BeeperMessage): string {
   const parts = [...counts.entries()].map(([mk, n]) => (n > 1 ? `${mk}x${n}` : mk));
   return parts.length ? " " + parts.join(" ") : "";
 }
-const MSG_TIME_W = 71;
+const MSG_TIME_W = 90;
 // bubble width shared by wrap calc and layout (full width minus time column)
 const MSG_BUB_W = 574 - MSG_TIME_W - 4;
 function msgGeom(_isMine: boolean) {
@@ -1035,7 +1035,12 @@ function computeMsgLayout(
   if (messages.length === 0) {
     return { focus: false, items: [{ msg: {} as BeeperMessage, lines: [loading ? "Loading messages..." : "No messages yet - send one!"], block: 0, blocks: 1 }] };
   }
-  const fi = focusIdx >= 0 ? Math.min(focusIdx, messages.length - 1) : -1;
+  let fi = focusIdx >= 0 ? Math.min(focusIdx, messages.length - 1) : -1;
+  // mic focus on a chat whose NEWEST message is oversized → show that message
+  // block-paginated (block 0) instead of one bubble that bleeds into the input
+  if (fi < 0 && messages.length && ownsPage(messages[messages.length - 1], messages)) {
+    fi = messages.length - 1;
+  }
   // own block-paginated page when the focused message exceeds the area
   if (fi >= 0 && ownsPage(messages[fi], messages)) {
     const selLines = wrapToPx(msgBubbleText(messages[fi], messages), msgGeom(messages[fi].isSender).bubbleW - 14);
@@ -3945,7 +3950,15 @@ export function GlassesUI({
         const isMine = !!it.msg.isSender;
         const tag = msgDateTag(it.msg.timestamp);
         const rx = reactionText(it.msg);
-        const timeLines = [tag, formatTime(it.msg.timestamp) + rx];
+        const tstr = formatTime(it.msg.timestamp);
+        const head = tag ? `${tag} ${tstr}` : tstr;
+        // one line if it fits; else marker drops below the time; only very
+        // wide date tags (TT.MM.JJ) keep the old two-line stack
+        const timeLines = textPx(head + rx) <= MSG_TIME_W - 4
+          ? [head + rx]
+          : textPx(head) <= MSG_TIME_W - 4
+            ? [head, rx].filter(Boolean)
+            : [tag, tstr + rx];
         if (it.blocks > 1) timeLines.push(`${it.block + 1}/${it.blocks}`);
         const timeTxt = timeLines.filter(Boolean).join("\n");
         // natural height per message (pages are packed by height); focus mode
