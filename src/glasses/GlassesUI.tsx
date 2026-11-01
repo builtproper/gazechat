@@ -878,7 +878,7 @@ function clockText(): string {
 }
 
 // ── message view layout (dynamic containers, max 3 messages/page) ─────────
-const MSG_TIME_W = 54;
+const MSG_TIME_W = 56;
 // bubble width shared by wrap calc and layout (full width minus time column)
 const MSG_BUB_W = 574 - MSG_TIME_W - 4;
 function msgGeom(_isMine: boolean) {
@@ -3813,7 +3813,7 @@ export function GlassesUI({
       // Phone-style: incoming → time LEFT, bubble right; mine → bubble left,
       // time RIGHT. Full-width bubbles. Top bar is ONE text container
       // (clock | <spaces> name) with the avatar image overlaid on the spaces.
-      const TIME_W = 54, BUB_W = 574 - TIME_W - 4;
+      const TIME_W = 56, BUB_W = 574 - TIME_W - 4;
       const slots = [0, 1, 2].map((i) => {
         const it = items[i];
         if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y + i * 80, h: 74, th: 40, timeY: MSG_AREA_Y + i * 80 + 18, bx: 0, tx: 0, isMine: false, show: false };
