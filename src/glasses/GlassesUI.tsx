@@ -857,7 +857,6 @@ function loadImage(url: string): Promise<HTMLImageElement> {
 export const MENU_CHATS = 1;
 export const MENU_LOW_PRIORITY = 2;
 export const MENU_ARCHIVED = 3;
-export const MENU_TYPE = 4;
 
 function filterChats(chats: any[], filter: "normal" | "low" | "archived"): any[] {
   if (filter === "low") return chats.filter((c) => c.isLowPriority && !c.isArchived);
@@ -962,17 +961,17 @@ function computeMsgLayout(
     const b = Math.max(0, Math.min(block, blocks - 1));
     return { focus: true, items: [{ msg: selMsg, lines: selLines.slice(b * MSG_MAX_LINES, (b + 1) * MSG_MAX_LINES), block: b, blocks }] };
   }
-  // dynamic stack: fill from the selected message upward with as many as fit
-  // (max 3 — container budget), each at its natural height
+  // dynamic stack: all messages when ≤3 (scrolling must never hide one);
+  // otherwise the window ending at the selection. Neighbours that don't fit
+  // are skipped instead of truncating the view.
+  const win = messages.length <= 3 ? messages : messages.slice(Math.max(0, sel - 2), sel + 1);
   const items: MsgItem[] = [];
   let used = 0;
-  for (let i = sel; i >= 0 && items.length < 3; i--) {
-    const m = messages[i];
-    if (isMediaMsg(m)) break; // a media neighbour would need full height → stop
+  for (const m of win) {
     const lines = wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14);
     const h = lines.length * MSG_LINE_H + MSG_RESERVE;
-    if (used + h + (items.length ? MSG_GAP : 0) > MSG_AREA_H) break;
-    items.unshift({ msg: m, lines, block: 0, blocks: 1 });
+    if (used + h + (items.length ? MSG_GAP : 0) > MSG_AREA_H) continue;
+    items.push({ msg: m, lines, block: 0, blocks: 1 });
     used += h + (items.length > 1 ? MSG_GAP : 0);
   }
   return { focus: false, items };
@@ -1003,58 +1002,16 @@ function getMicIcon(): number[] {
   return micIconBytes;
 }
 
-// ── compose mode: private typing on the glasses via a hidden phone input ────
-// Same proven pattern as the Edit-Mode test: an invisible <input> on the phone
-// receives the hardware/software keyboard; only the text + caret are mirrored
-// to the glasses input container. Enter sends, Escape cancels.
-let composeActive = false;
+// ── compose mirror: the phone's message input mirrors its live text to the
+// glasses input container (full brightness while typing, dim hint otherwise) ─
 let composeText = "";
-let composeInput: HTMLInputElement | null = null;
-let composeSendFn: ((t: string) => Promise<boolean>) | null = null;
-let composeExitFn: (() => void) | null = null;
-let composeMirrorFn: (() => void) | null = null;
-
-function ensureComposeInput() {
-  if (composeInput) return composeInput;
-  const el = document.createElement("input");
-  el.type = "text";
-  el.autocapitalize = "off";
-  el.autocomplete = "off";
-  el.spellcheck = false;
-  Object.assign(el.style, {
-    position: "fixed", left: "0", top: "0", width: "1px", height: "1px",
-    opacity: "0", border: "0", padding: "0", background: "transparent", color: "transparent",
-  } as CSSStyleDeclaration);
-  document.body.appendChild(el);
-  const sync = () => { composeText = el.value; composeMirrorFn?.(); };
-  el.addEventListener("input", sync);
-  el.addEventListener("keyup", sync);
-  el.addEventListener("keydown", (e: KeyboardEvent) => {
-    if (e.key === "Enter") {
-      e.preventDefault();
-      const t = el.value.trim();
-      if (t && composeSendFn) { el.value = ""; composeText = ""; void composeSendFn(t); }
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      el.value = ""; composeText = ""; composeExitFn?.();
-    }
-  });
-  el.addEventListener("blur", () => { if (composeActive) setTimeout(() => el.focus(), 50); });
-  composeInput = el;
-  return el;
+let composeMirror: (() => void) | null = null;
+export function gcSetComposeText(t: string) {
+  composeText = t;
+  composeMirror?.();
 }
 
-function startCompose(send: (t: string) => Promise<boolean>, exit: () => void, mirror: () => void) {
-  composeActive = true; composeSendFn = send; composeExitFn = exit; composeMirrorFn = mirror;
-  composeText = "";
-  const el = ensureComposeInput();
-  el.value = "";
-  el.focus({ preventScroll: true });
-}
-function stopCompose() {
-  composeActive = false;
-  try { composeInput?.blur(); } catch {}
-}
+
 
 // top-bar chat avatar: 36x36 rounded grayscale PNG (cached per chat)
 const topAvatarCache = new Map<string, number[]>();
@@ -1896,7 +1853,6 @@ export function GlassesUI({
   const chatFilterRef = useRef<"normal" | "low" | "archived">("normal");
   const msgBlockRef = useRef<number>(0);
   const msgTopNameRef = useRef<string>("");
-  const msgInputSigRef = useRef<string>("");
   const msgSigRef = useRef<string>("");
   const chatPageSigRef = useRef<string>("");
   const chatSelSigRef = useRef<string>("");
@@ -3505,6 +3461,9 @@ export function GlassesUI({
         }
 
         case "SELECT_HIGHLIGHTED": {
+          // On the new messages view a tap must NOT open the legacy
+          // messageDetail screen (that was the "old view" leaking through)
+          if (snapshot.currentScreen === "messages") return nav;
           // Track clicks for demo mode easter egg
           const now = Date.now();
           clickTimestamps.current.push(now);
@@ -3762,6 +3721,13 @@ export function GlassesUI({
       // shape = focus + sender pattern + slot heights (positions can't upgrade)
       const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}` : "x")).join("");
       msgTopNameRef.current = chatName;
+      // phone typing mirrors live into the glasses input container
+      composeMirror = () => {
+        const b = glassesBridgeRef.current;
+        if (!b) return;
+        const txt = composeText ? truncatePx(composeText, 500) + "|" : "Type on your phone to type a message.";
+        void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt, textColor: composeText ? undefined : 0 }));
+      };
       // pad so the name starts clear of the avatar image (x 70..104)
       const lead = `${clockText()} |`;
       const padPx = Math.max(0, 106 - textPx(lead));
@@ -3775,27 +3741,22 @@ export function GlassesUI({
         new TextContainerProperty({ containerID: id, containerName: name, xPosition: x, yPosition: sy, width: w, height: sh, paddingLength: 2, borderWidth: border, borderColor: border ? 3 : 0, borderRadius: border ? 6 : 0, content, textColor: bright, isEventCapture: capture ? 1 : 0, zOrderIndex: id });
 
       const textObject = [
-        new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 2, yPosition: 2, width: 570, height: 36, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 1, zOrderIndex: 1 }),
+        new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 2, yPosition: 2, width: 570, height: 38, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 1, zOrderIndex: 1 }),
         mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0),
         mk(3, "time0", slots[0].tx, TIME_W, slots[0].timeY, 40, slots[0].time, 0, 1),
         mk(4, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0),
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, 40, slots[1].time, 0, 1),
         mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0),
         mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, 40, slots[2].time, 0, 1),
-        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeActive ? (truncatePx(composeText, 500) + "|") : "Menu \u2192 Type message to reply", textColor: composeActive ? undefined : 1, zOrderIndex: 11 }),
+        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? truncatePx(composeText, 500) + "|" : "Type on your phone to type a message.", textColor: composeText ? undefined : 0, zOrderIndex: 11 }),
       ];
 
       if (needRebuild) {
         const rb = await bridge.rebuildPageContainer(new RebuildPageContainer({
           containerTotalNum: 10,
-          menuObject: new MenuContainerProperty({
-            menuItems: [
-              new MenuItemProperty({ itemName: composeActive ? "Stop typing" : "Type message", itemID: MENU_TYPE }),
-            ],
-          }),
           textObject,
           imageObject: [
-            new ImageContainerProperty({ containerID: 8, containerName: "topav", xPosition: 70, yPosition: 3, width: 34, height: 34, zOrderIndex: 8 }),
+            new ImageContainerProperty({ containerID: 8, containerName: "topav", xPosition: 70, yPosition: 4, width: 34, height: 34, zOrderIndex: 8 }),
             new ImageContainerProperty({ containerID: 12, containerName: "mic", xPosition: 540, yPosition: 250, width: 34, height: 34, zOrderIndex: 12 }),
           ],
           listObject: [],
@@ -3990,9 +3951,9 @@ export function GlassesUI({
       if (snapshot.currentScreen === "chats") {
         await renderChatsPage(bridge, snapshot, nav);
       } else if (snapshot.currentScreen === "messages") {
-        // always the new bubble view — never fall through to the legacy
-        // blocky renderTextPage (that leaked "Loading messages…" + the
-        // old message list on back-navigation)
+        // keep the chat list on screen until the first messages arrive —
+        // rendering a loading placeholder caused a wasted rebuild (~2s)
+        if (snapshot.isLoading && snapshot.messages.length === 0) return;
         await renderMessagesPage(bridge, snapshot, nav);
       } else {
         const lines = getDisplayLines(snapshot, nav);
@@ -4058,27 +4019,6 @@ export function GlassesUI({
           const menuId = event.menuItemClickEvent?.itemID ?? (event as any).jsonData?.itemID;
           if (menuId != null) {
             const id = menuId;
-            if (id === MENU_TYPE) {
-              if (composeActive) {
-                stopCompose();
-              } else {
-                startCompose(
-                  async (t) => { await sendMessage(t); stopCompose(); msgInputSigRef.current = ""; void flushGlassesDisplay(); return true; },
-                  () => { msgInputSigRef.current = ""; void flushGlassesDisplay(); },
-                  () => {
-                    const b = glassesBridgeRef.current;
-                    if (!b) return;
-                    const txt = truncatePx(composeText, 500) + "|";
-                    void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt }));
-                  },
-                );
-              }
-              // rebuild so the menu label flips (Type ↔ Stop typing)
-              msgInputSigRef.current = "";
-              glassesLayoutRef.current = null;
-              void flushGlassesDisplay();
-              return;
-            }
             const next =
               id === MENU_LOW_PRIORITY ? "low" :
               id === MENU_ARCHIVED ? "archived" : "normal";

@@ -12,6 +12,7 @@ import {
   type SpeechProviderModel,
 } from "../services";
 import styles from "./DevModeUI.module.css";
+import { gcSetComposeText } from "../glasses/GlassesUI";
 
 const TAILSCALE_SETUP_URL =
   "https://github.com/thibautrey/even-messages/blob/main/docs/TAILSCALE_SETUP.md";
@@ -1446,6 +1447,7 @@ function MessagesView({
     if (input.value.trim()) {
       onSendMessage(input.value.trim());
       input.value = "";
+      gcSetComposeText("");
     }
   };
 
@@ -1574,6 +1576,7 @@ function MessagesView({
               type="text"
               placeholder="Type a message..."
               className={styles.input}
+              onInput={(e) => gcSetComposeText((e.target as HTMLInputElement).value)}
             />
             <button type="submit" className={styles.sendButton}>
               Send
