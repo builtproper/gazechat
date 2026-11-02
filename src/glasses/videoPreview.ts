@@ -46,23 +46,23 @@ function ensureEls(): { v: HTMLVideoElement; c: HTMLCanvasElement } | null {
   return { v: video, c: canvas };
 }
 
-/** Cover-fit draw + 4-bit quantization (same palette trick as the avatar strip). */
+/** Cover-fit draw → PNG bytes. The host converts to 4-bit greyscale itself
+ *  (imageToGray4), so the old per-pixel getImageData/quantize/putImageData loop
+ *  (~165k iterations/frame) was redundant CPU that capped the phone at ~0.7 fps.
+ *  ctx.filter does the greyscale natively; if a WebView lacks it the color PNG
+ *  still renders (host discards chroma). */
 function grabFrame(c: HTMLCanvasElement): number[] | null {
   const v = video!;
   if (!v.videoWidth || !v.videoHeight) return null;
   const ctx = c.getContext("2d")!;
+  ctx.filter = "none";
   ctx.fillStyle = "#000";
   ctx.fillRect(0, 0, VID_W, VID_H);
   const scale = Math.max(VID_W / v.videoWidth, VID_H / v.videoHeight);
   const w = v.videoWidth * scale, h = v.videoHeight * scale;
+  ctx.filter = "grayscale(1)";
   ctx.drawImage(v, (VID_W - w) / 2, (VID_H - h) / 2, w, h);
-  const img = ctx.getImageData(0, 0, VID_W, VID_H);
-  const d = img.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const g = Math.round(((d[i] * 0.299 + d[i + 1] * 0.587 + d[i + 2] * 0.114) / 255) * 15) * 17;
-    d[i] = d[i + 1] = d[i + 2] = g;
-  }
-  ctx.putImageData(img, 0, 0);
+  ctx.filter = "none";
   const url = c.toDataURL("image/png");
   return Array.from(atob(url.split(",")[1] || ""), (ch) => ch.charCodeAt(0));
 }
