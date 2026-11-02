@@ -3623,6 +3623,13 @@ export function GlassesUI({
           suppressReloadTimeoutRef.current = null;
         }, 2000); // Suppress for 2 seconds
 
+        // sending returns to the input: drop video preview + reset focus to mic
+        unloadVideo();
+        videoLoopingRef.current = false;
+        videoMsgIdRef.current = null;
+        msgFocusRef.current = -1;
+        msgBlockRef.current = 0;
+        micDimRef.current = false;
         void loadMessages(selectedChat);
         return true;
       } catch (e) {
@@ -3745,7 +3752,10 @@ export function GlassesUI({
               Math.max(1, Math.ceil(wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14).length / MSG_MAX_LINES));
             let newFocus = focus;
             let newBlock = msgBlockRef.current;
-            if (focus >= 0 && ownsPage(messages[focus], messages)) {
+            // block-paging only for tall TEXT (ownsPage + >1 block). A video or
+            // single image owns its page but has ONE block → must use the normal
+            // per-message path, else up-scroll at the page top does nothing (02.11.)
+            if (focus >= 0 && ownsPage(messages[focus], messages) && blocksOf(messages[focus]) > 1) {
               // paging inside a tall focused message
               const nb = blocksOf(messages[focus]);
               if (down && newBlock < nb - 1) newBlock++;
@@ -3804,9 +3814,12 @@ export function GlassesUI({
                 stopLoop();
                 videoLoopingRef.current = false;
               } else {
+                const vidId = fm.id;
                 startLoop(async (bytes) => {
                   const b = glassesBridgeRef.current;
-                  if (!b) throw new Error("no bridge");
+                  if (!b || videoMsgIdRef.current !== vidId || stateRef.current.currentScreen !== "messages") {
+                    throw new Error("video preview superseded");
+                  }
                   await b.updateImageRawData(new ImageRawDataUpdate({ containerID: 14, containerName: "vid", imageData: bytes }));
                 });
                 videoLoopingRef.current = true;
