@@ -51,30 +51,7 @@ function ensureEls(): { v: HTMLVideoElement; c: HTMLCanvasElement } | null {
  *  (~165k iterations/frame) was redundant CPU that capped the phone at ~0.7 fps.
  *  ctx.filter does the greyscale natively; if a WebView lacks it the color PNG
  *  still renders (host discards chroma). */
-function grabFrame(c: HTMLCanvasElement): number[] | null {
-  const v = video!;
-  if (!v.videoWidth || !v.videoHeight) return null;
-  const ctx = c.getContext("2d")!;
-  ctx.filter = "none";
-  ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, VID_W, VID_H);
-  const scale = Math.max(VID_W / v.videoWidth, VID_H / v.videoHeight);
-  const w = v.videoWidth * scale, h = v.videoHeight * scale;
-  ctx.drawImage(v, (VID_W - w) / 2, (VID_H - h) / 2, w, h);
-  ctx.filter = "none";
-  // RAW grayscale bytes (1/px, exactly container size) instead of PNG:
-  // measured 02.11. — grab(PNG) only 9-37ms but send 690-1630ms for an
-  // 80K-entry number[]; the cost is bridge serialization + host PNG decode.
-  // Raw gray = 41,472 entries, no PNG anywhere (host still does imageToGray4).
-  const img = ctx.getImageData(0, 0, VID_W, VID_H).data;
-  const gray = new Array(VID_W * VID_H);
-  for (let i = 0, p = 0; i < img.length; i += 4, p++) {
-    gray[p] = (img[i] * 77 + img[i + 1] * 150 + img[i + 2] * 29) >> 8; // BT.601 int
-  }
-  return gray;
-}
-
-/** PNG-encoded frame (poster path — the documented-safe format). */
+/** PNG-encoded frame (poster AND loop — the only format the host renders). */
 function grabFramePng(c: HTMLCanvasElement): number[] | null {
   const v = video!;
   if (!v.videoWidth || !v.videoHeight) return null;
@@ -96,12 +73,12 @@ async function pump() {
   if (inFlight) return; // previous send still running → skip this tick
   inFlight = true;
   try {
-    const t0 = performance.now();
-    const bytes = grabFrame(canvas);
-    const t1 = performance.now();
+    // PNG bytes — the ONLY format the host renders for this container on
+    // device; raw grayscale number[] silently produced nothing (02.11.).
+    // send costs 690-1630ms (bridge serialization of ~80k entries), which
+    // caps the loop at ~1 fps — accepted tradeoff until the host improves.
+    const bytes = grabFramePng(canvas);
     if (bytes) await sendFrame(bytes);
-    const t2 = performance.now();
-    console.log(`[vidperf] grab ${Math.round(t1 - t0)}ms send ${Math.round(t2 - t1)}ms bytes ${bytes ? bytes.length : 0}`);
   } catch { /* superseded or hiccup: stopLoop ends the loop via running */ }
   inFlight = false;
 }
