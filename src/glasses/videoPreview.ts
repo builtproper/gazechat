@@ -2,7 +2,7 @@
  * Video preview engine for GazeChat (GazeChat fork).
  *
  * Stufe 1: poster frame (first frame as a still image).
- * Stufe 2: ~5 fps grayscale loop, frame-drop while a BLE send is in flight.
+ * Stufe 2: 2 fps grayscale PNG loop, frame-drop while a BLE send is in flight.
  *
  * The G2 image container is capped at 288x144 and every updateImageRawData
  * costs ~104 ms fixed + ~4 ms/KB — so the loop is throttled by the transport,
@@ -23,9 +23,6 @@ let audioOn = false;
 let inFlight = false;
 let rafId = 0;
 let sendFrame: FrameSender | null = null;
-// JPEG encodes ~5-10x faster than PNG; if the host rejects it (only PNG is
-// documented), the first failed frame flips this back to PNG automatically
-let useJpeg = true;
 
 function ensureEls(): { v: HTMLVideoElement; c: HTMLCanvasElement } | null {
   if (typeof document === "undefined") return null;
@@ -54,7 +51,7 @@ function ensureEls(): { v: HTMLVideoElement; c: HTMLCanvasElement } | null {
  *  (~165k iterations/frame) was redundant CPU that capped the phone at ~0.7 fps.
  *  ctx.filter does the greyscale natively; if a WebView lacks it the color PNG
  *  still renders (host discards chroma). */
-function grabFrame(c: HTMLCanvasElement, forcePng = false): number[] | null {
+function grabFrame(c: HTMLCanvasElement): number[] | null {
   const v = video!;
   if (!v.videoWidth || !v.videoHeight) return null;
   const ctx = c.getContext("2d")!;
@@ -66,7 +63,7 @@ function grabFrame(c: HTMLCanvasElement, forcePng = false): number[] | null {
   ctx.filter = "grayscale(1)";
   ctx.drawImage(v, (VID_W - w) / 2, (VID_H - h) / 2, w, h);
   ctx.filter = "none";
-  const url = useJpeg && !forcePng ? c.toDataURL("image/jpeg", 0.82) : c.toDataURL("image/png");
+  const url = c.toDataURL("image/png");
   return Array.from(atob(url.split(",")[1] || ""), (ch) => ch.charCodeAt(0));
 }
 
@@ -76,19 +73,14 @@ async function pump() {
   inFlight = true;
   try {
     const bytes = grabFrame(canvas);
-    if (bytes) {
-      const ok = await sendFrame(bytes);
-      if (!ok && useJpeg) {
-        useJpeg = false; // host rejected JPEG (or hiccup): retry once with PNG
-        const retry = grabFrame(canvas);
-        if (retry) await sendFrame(retry).catch(() => false);
-      }
-    }
+    if (bytes) await sendFrame(bytes);
   } catch { /* superseded or hiccup: stopLoop ends the loop via running */ }
   inFlight = false;
 }
 
-const LOOP_MS = 200; // ~5 fps ceiling; drop-while-busy keeps it under transport
+const LOOP_MS = 500; // 2 fps (Joel 02.11.: transport is format-independent —
+// the host always expands to the same 20.7KB gray4 buffer, so PNG
+// wins on quality; a slower tick just leaves BLE headroom)
 
 /** Load a video blob URL; resolves once the first frame is available. */
 export function loadVideo(blobUrl: string): Promise<{ duration: number }> {
@@ -118,7 +110,7 @@ export async function posterFrame(): Promise<number[] | null> {
   if (v.readyState < 2) await new Promise((r) => { v.addEventListener("loadeddata", r, { once: true }); });
   try { v.currentTime = Math.min(0.5, (v.duration || 1) / 3); } catch { /* some sources refuse */ }
   await new Promise((r) => { v.addEventListener("seeked", r, { once: true }); setTimeout(r, 600); });
-  return grabFrame(els.c, true);
+  return grabFrame(els.c);
 }
 
 /** Start the ~5 fps loop. The sender must await the actual BLE write. */
