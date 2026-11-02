@@ -49,7 +49,7 @@ import type { SpeechApiConfig } from "../services";
 import { getApiConfig } from "../services/config";
 import {
   loadVideo, posterFrame, startLoop, stopLoop, unloadVideo,
-  setPreviewAudio, videoCurrentTime, VID_W, VID_H,
+  setPreviewAudio, videoCurrentTime, isFrameInFlight as videoFrameInFlight, VID_W, VID_H,
 } from "./videoPreview";
 
 // ═══════════════════════════════════════════════════════════════
@@ -4626,6 +4626,8 @@ export function GlassesUI({
   useEffect(() => {
     const id = window.setInterval(() => {
       if (stateRef.current.currentScreen === "messages" && videoLoopingRef.current && videoMsgIdRef.current) {
+        // don't fire the bub0 text upgrade while an image send owns the bridge
+        if (videoFrameInFlight()) return;
         videoPosRef.current = videoCurrentTime();
         setState((st) => ({ ...st }));
       }

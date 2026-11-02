@@ -13,7 +13,7 @@
 export const VID_W = 288;
 export const VID_H = 144;
 
-export type FrameSender = (img: number[] | string) => Promise<boolean>;
+export type FrameSender = (imgBytes: number[]) => Promise<boolean>;
 
 let video: HTMLVideoElement | null = null;
 let canvas: HTMLCanvasElement | null = null;
@@ -93,16 +93,8 @@ function assembleGrayPng(w: number, h: number, idat: number[]): number[] {
   ];
 }
 
-// Payload transport experiment (02.11.): the docs promise base64-PNG support,
-// but the first device test sent our HANDCRAFTED gray8 PNG as base64 — never
-// the exact documented recipe (plain toDataURL PNG, "data:image/png;base64,"
-// prefix stripped). b64 mode tries that recipe; if the host reports failure
-// the loop auto-falls back to number[] (proven to render).
-let payloadMode: "b64" | "num" = "b64";
-export function getPayloadMode() { return payloadMode; }
-
 /** PNG-encoded frame (poster AND loop — the only format the host renders). */
-async function grabFramePng(c: HTMLCanvasElement): Promise<number[] | string | null> {
+async function grabFramePng(c: HTMLCanvasElement): Promise<number[] | null> {
   const v = video!;
   if (!v.videoWidth || !v.videoHeight) return null;
   const ctx = c.getContext("2d")!;
@@ -118,13 +110,6 @@ async function grabFramePng(c: HTMLCanvasElement): Promise<number[] | string | n
   const gray = new Uint8Array(VID_W * VID_H);
   for (let i = 0, p = 0; i < d.length; i += 4, p++) {
     gray[p] = (((d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8) >> 4) * 17;
-  }
-  if (payloadMode === "b64") {
-    // documented recipe verbatim: toDataURL PNG (RGB, gray values in all
-    // channels) with the data-URI prefix stripped, sent as a base64 string
-    for (let i = 0, q = 0; i < d.length; i += 4, q++) { d[i] = d[i + 1] = d[i + 2] = gray[q]; }
-    ctx.putImageData(img, 0, 0);
-    return c.toDataURL("image/png").split(",")[1] || null;
   }
   const raw = new Uint8Array(VID_H * (VID_W + 1));
   for (let y = 0; y < VID_H; y++) {
@@ -145,18 +130,8 @@ async function pump() {
   if (inFlight) return; // previous send still running → skip this tick
   inFlight = true;
   try {
-    const t0 = performance.now();
-    let bytes = await grabFramePng(canvas);
-    const t1 = performance.now();
-    let ok = bytes ? await sendFrame(bytes) : false;
-    if (!ok && bytes && payloadMode === "b64") {
-      payloadMode = "num";
-      console.log("[vid] base64 payload rejected → number[] fallback");
-      bytes = await grabFramePng(canvas);
-      if (bytes) ok = await sendFrame(bytes).catch(() => false);
-    }
-    const t2 = performance.now();
-    console.log(`[vidperf] ${payloadMode} grab ${Math.round(t1 - t0)}ms send ${Math.round(t2 - t1)}ms len ${bytes ? bytes.length : 0} ok ${ok}`);
+    const bytes = await grabFramePng(canvas);
+    if (bytes) await sendFrame(bytes);
   } catch { /* superseded or hiccup: stopLoop ends the loop via running */ }
   inFlight = false;
 }
@@ -193,11 +168,7 @@ export async function posterFrame(): Promise<number[] | null> {
   if (v.readyState < 2) await new Promise((r) => { v.addEventListener("loadeddata", r, { once: true }); });
   try { v.currentTime = Math.min(0.5, (v.duration || 1) / 3); } catch { /* some sources refuse */ }
   await new Promise((r) => { v.addEventListener("seeked", r, { once: true }); setTimeout(r, 600); });
-  const prev = payloadMode;
-  payloadMode = "num"; // poster must render even if base64 is unsupported
-  const png = await grabFramePng(els.c);
-  payloadMode = prev;
-  return Array.isArray(png) ? png : null; // num mode always yields number[]
+  return await grabFramePng(els.c);
 }
 
 /** Start the ~5 fps loop. The sender must await the actual BLE write. */
@@ -238,6 +209,9 @@ export function setPreviewAudio(on: boolean) {
 export function getPreviewAudio() { return audioOn; }
 
 export function isPlaying() { return running && !!video && !video.paused; }
+/** true while a frame crosses the bridge — other writers (transport ticker)
+ *  should hold off: overlapping bridge writes race (matic-even H5). */
+export function isFrameInFlight() { return inFlight; }
 export function togglePlay(): boolean {
   if (!video || !running) return false;
   if (video.paused) { void video.play().catch(() => {}); } else { video.pause(); }
