@@ -1026,14 +1026,13 @@ function videoAssetUrl(m: BeeperMessage, baseUrl: string | undefined): string | 
 }
 // one-line transport inside the video bubble, bottom row:
 //   "▷ 00:00  ▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏  01:23"
-// 20 slots = 5% steps; played slots become ▏ (U+258F, full-height tick),
-// empty slots are ▁ (U+2581, bottom hairline track). Both share the 20px
-// device advance (space would be 6px → drifting line), so the total width
-// stays constant while filling.
+// 10 slots = 10% steps; played slots become ▒ (U+2592 medium shade), empty
+// slots are ▁ (U+2581 bottom hairline). Both share the ~20px device advance
+// (space would be 6px → drifting line), so the width stays constant.
 function videoTransportLine(pos: number, dur: number, playing: boolean): string {
-  const slots = 20;
+  const slots = 10;
   const n = dur > 0 ? Math.max(0, Math.min(slots, Math.round((pos / dur) * slots))) : 0;
-  const bar = "\u258F".repeat(n) + "\u2581".repeat(slots - n);
+  const bar = "\u2592".repeat(n) + "\u2581".repeat(slots - n);
   const icon = playing ? "||" : "\u25B7";
   return `${icon} ${fmtDur(pos)}  ${bar}  ${fmtDur(dur)}`;
 }
@@ -4106,7 +4105,7 @@ export function GlassesUI({
         // bubbleW−14, the 6px space fits in the reserve). Never do this in
         // the time container — its lines sit right at the wrap limit.
         const vidBody = isVid
-          ? "\n".repeat(5) + videoTransportLine(videoPosRef.current, videoDurRef.current, videoLoopingRef.current)
+          ? "\n".repeat(6) + videoTransportLine(videoPosRef.current, videoDurRef.current, videoLoopingRef.current)
           : it.lines.join("\n");
         return { bubble: vidBody + (bright === 4 ? " " : ""), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
       });
@@ -4145,7 +4144,7 @@ export function GlassesUI({
 
       const textObject = [
         new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 1, yPosition: 2, width: 574, height: 38, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 0, zOrderIndex: 1 }),
-        mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show && !videoFocus ? 1 : 0, slots[0].bright),
+        mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0, slots[0].bright),
         mk(3, "time0", slots[0].tx, TIME_W, slots[0].timeY, slots[0].th, slots[0].time, 0, slots[0].bright === 4 ? 2 : 1),
         mk(4, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0, slots[1].bright),
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, slots[1].bright === 4 ? 2 : 1),
