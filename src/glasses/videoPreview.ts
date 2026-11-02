@@ -75,8 +75,12 @@ async function pump() {
   if (inFlight) return; // previous send still running → skip this tick
   inFlight = true;
   try {
+    const t0 = performance.now();
     const bytes = grabFrame(canvas);
+    const t1 = performance.now();
     if (bytes) await sendFrame(bytes);
+    const t2 = performance.now();
+    console.log(`[vidperf] grab ${Math.round(t1 - t0)}ms send ${Math.round(t2 - t1)}ms bytes ${bytes ? bytes.length : 0}`);
   } catch { /* superseded or hiccup: stopLoop ends the loop via running */ }
   inFlight = false;
 }
