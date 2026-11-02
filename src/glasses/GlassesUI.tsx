@@ -3954,7 +3954,11 @@ export function GlassesUI({
         const tx = isMine ? 574 - TIME_W : 0;
         const th = tlines.length * MSG_LINE_H + MSG_RESERVE;
         const bright = focus === slotIdx[i] ? 4 : 2;
-        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
+        // firmware ignores textColor when content is identical → the focused
+        // bubble gets an invisible trailing space (wrap-safe: lines break at
+        // bubbleW−14, the 6px space fits in the reserve). Never do this in
+        // the time container — its lines sit right at the wrap limit.
+        return { bubble: it.lines.join("\n") + (bright === 4 ? " " : ""), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
       });
       // stack slots top-down at their natural heights; center time beside bubble
       let y = MSG_AREA_Y;
