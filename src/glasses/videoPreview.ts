@@ -21,7 +21,6 @@ let objUrl: string | null = null;
 let running = false;
 let audioOn = false;
 let inFlight = false;
-let wantFrame = false;
 let rafId = 0;
 let sendFrame: FrameSender | null = null;
 
@@ -70,26 +69,16 @@ function grabFrame(c: HTMLCanvasElement): number[] | null {
 
 async function pump() {
   if (!running || !sendFrame || !canvas) return;
-  if (inFlight) { wantFrame = true; return; } // drop while BLE is busy
+  if (inFlight) return; // previous send still running → skip this tick
   inFlight = true;
   try {
     const bytes = grabFrame(canvas);
     if (bytes) await sendFrame(bytes);
-  } catch { /* transport hiccup: keep looping */ }
+  } catch { /* superseded or hiccup: stopLoop ends the loop via running */ }
   inFlight = false;
-  if (running && wantFrame) { wantFrame = false; scheduleNext(); }
 }
 
-function scheduleNext() {
-  const v = video!;
-  // requestVideoFrameCallback fires per DECODED frame (iOS Safari 15.4+);
-  // fallback: timeupdate (~4 Hz) or a plain interval
-  if (typeof (v as any).requestVideoFrameCallback === "function") {
-    (v as any).requestVideoFrameCallback(() => { void pump(); });
-  } else {
-    rafId = window.setTimeout(() => { void pump(); scheduleNext(); }, 180);
-  }
-}
+const LOOP_MS = 200; // ~5 fps ceiling; drop-while-busy keeps it under transport
 
 /** Load a video blob URL; resolves once the first frame is available. */
 export function loadVideo(blobUrl: string): Promise<{ duration: number }> {
@@ -131,12 +120,17 @@ export function startLoop(sender: FrameSender) {
   video.muted = !audioOn;
   if (video.ended) { try { video.currentTime = 0; } catch { /* ignore */ } }
   void video.play().catch(() => { /* autoplay blocked: poster stays */ });
-  scheduleNext();
+  // self-rescheduling timer: a repeating tick is robust where the rVFC
+  // callback chain stalled after one frame on device (02.11.)
+  const tick = () => {
+    if (!running) return;
+    void pump().finally(() => { if (running) rafId = window.setTimeout(tick, LOOP_MS); });
+  };
+  rafId = window.setTimeout(tick, LOOP_MS);
 }
 
 export function stopLoop() {
   running = false;
-  wantFrame = false;
   sendFrame = null;
   if (rafId) { clearTimeout(rafId); rafId = 0; }
   try { video?.pause(); } catch { /* ignore */ }
