@@ -141,9 +141,6 @@ async function pump() {
   inFlight = false;
 }
 
-const LOOP_MS = 1000; // 1 fps (Joel 02.11.: measured bridge floor is ~1s per
-// frame regardless of payload tricks — a slower tick just wastes battery, a
-// faster one only produces dropped ticks)
 
 /** Load a video blob URL; resolves once the first frame is available. */
 export function loadVideo(blobUrl: string): Promise<{ duration: number }> {
@@ -186,20 +183,23 @@ export function startLoop(sender: FrameSender, onDelivered?: PositionReporter) {
   video.muted = !audioOn;
   if (video.ended) { try { video.currentTime = 0; } catch { /* ignore */ } }
   void video.play().catch(() => { /* autoplay blocked: poster stays */ });
-  // FIXED-RATE tick (Joel 02.11.): the old self-rescheduling chain waited
-  // LOOP_MS AFTER each send finished → period was send+1s (~0.5 fps). A plain
-  // interval keeps a true 1 Hz rhythm; pump() skips ticks while a send is
-  // still in flight, so a slow frame costs one skipped tick, never a
-  // compounding delay.
-  if (rafId) clearInterval(rafId);
-  rafId = window.setInterval(() => { if (running) void pump(); }, LOOP_MS);
+  // FREE-RUNNING loop (Joel 02.11.): chain the next frame immediately after
+  // the previous send resolves — the bridge (~0.5–1s/frame) is the throttle,
+  // so the loop self-paces to the fastest rate the transport allows. A 150ms
+  // gap after each frame lets the transport-line text upgrade land before the
+  // next image send (overlapping bridge writes race — matic-even H5).
+  const tick = () => {
+    if (!running) return;
+    void pump().finally(() => { if (running) rafId = window.setTimeout(tick, 150); });
+  };
+  rafId = window.setTimeout(tick, 150);
 }
 
 export function stopLoop() {
   running = false;
   sendFrame = null;
   reportPos = null;
-  if (rafId) { clearInterval(rafId); rafId = 0; }
+  if (rafId) { clearTimeout(rafId); rafId = 0; }
   try { video?.pause(); } catch { /* ignore */ }
 }
 
