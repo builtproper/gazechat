@@ -64,6 +64,17 @@ function grabFramePng(c: HTMLCanvasElement): number[] | null {
   ctx.filter = "grayscale(1)";
   ctx.drawImage(v, (VID_W - w) / 2, (VID_H - h) / 2, w, h);
   ctx.filter = "none";
+  // quantize to the display's 16 gray levels BEFORE encoding: the G2 is 4-bit
+  // anyway (host does imageToGray4), and a 16-level PNG deflates ~2x smaller
+  // than an 8-bit one → half the number[] entries across the bridge → the
+  // measured send cost (690-1630ms, dominated by array size) roughly halves.
+  const img = ctx.getImageData(0, 0, VID_W, VID_H);
+  const d = img.data;
+  for (let i = 0; i < d.length; i += 4) {
+    const g = (((d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8) >> 4) * 17; // → 0..255 in 16 steps
+    d[i] = d[i + 1] = d[i + 2] = g;
+  }
+  ctx.putImageData(img, 0, 0);
   const url = c.toDataURL("image/png");
   return Array.from(atob(url.split(",")[1] || ""), (ch) => ch.charCodeAt(0));
 }
@@ -73,12 +84,12 @@ async function pump() {
   if (inFlight) return; // previous send still running → skip this tick
   inFlight = true;
   try {
-    // PNG bytes — the ONLY format the host renders for this container on
-    // device; raw grayscale number[] silently produced nothing (02.11.).
-    // send costs 690-1630ms (bridge serialization of ~80k entries), which
-    // caps the loop at ~1 fps — accepted tradeoff until the host improves.
+    const t0 = performance.now();
     const bytes = grabFramePng(canvas);
+    const t1 = performance.now();
     if (bytes) await sendFrame(bytes);
+    const t2 = performance.now();
+    console.log(`[vidperf] grab ${Math.round(t1 - t0)}ms send ${Math.round(t2 - t1)}ms bytes ${bytes ? bytes.length : 0}`);
   } catch { /* superseded or hiccup: stopLoop ends the loop via running */ }
   inFlight = false;
 }
