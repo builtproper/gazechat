@@ -13,7 +13,7 @@
 export const VID_W = 288;
 export const VID_H = 144;
 
-export type FrameSender = (imgBytes: number[]) => Promise<boolean>;
+export type FrameSender = (img: number[] | string) => Promise<boolean>;
 
 let video: HTMLVideoElement | null = null;
 let canvas: HTMLCanvasElement | null = null;
@@ -94,7 +94,7 @@ function assembleGrayPng(w: number, h: number, idat: number[]): number[] {
 }
 
 /** PNG-encoded frame (poster AND loop — the only format the host renders). */
-async function grabFramePng(c: HTMLCanvasElement): Promise<number[] | null> {
+async function grabFramePng(c: HTMLCanvasElement): Promise<string | number[] | null> {
   const v = video!;
   if (!v.videoWidth || !v.videoHeight) return null;
   const ctx = c.getContext("2d")!;
@@ -117,12 +117,22 @@ async function grabFramePng(c: HTMLCanvasElement): Promise<number[] | null> {
     raw.set(gray.subarray(y * VID_W, (y + 1) * VID_W), y * (VID_W + 1) + 1);
   }
   const idat = await zlibDeflate(raw);
-  if (idat) return assembleGrayPng(VID_W, VID_H, idat);
+  if (idat) return b64FromBytes(assembleGrayPng(VID_W, VID_H, idat));
   // no CompressionStream (old iOS): RGB toDataURL fallback
   for (let i = 0, p = 0; i < d.length; i += 4, p++) { d[i] = d[i + 1] = d[i + 2] = gray[p]; }
   ctx.putImageData(img, 0, 0);
-  const url = c.toDataURL("image/png");
-  return Array.from(atob(url.split(",")[1] || ""), (ch) => ch.charCodeAt(0));
+  // base64 PNG string (documented format) — one field, no 11k-entry JSON array
+  return c.toDataURL("image/png").split(",")[1] || "";
+}
+
+/** number[] → base64 string without atob/btoa roundtrip gymnastics. */
+function b64FromBytes(bytes: number[]): string {
+  let bin = "";
+  const CH = 8192;
+  for (let i = 0; i < bytes.length; i += CH) {
+    bin += String.fromCharCode(...bytes.slice(i, i + CH));
+  }
+  return btoa(bin);
 }
 
 async function pump() {
@@ -165,7 +175,7 @@ export function loadVideo(blobUrl: string): Promise<{ duration: number }> {
 }
 
 /** Single still (poster): seek near the start, grab one frame. */
-export async function posterFrame(): Promise<number[] | null> {
+export async function posterFrame(): Promise<string | number[] | null> {
   const els = ensureEls();
   if (!els || !video) return null;
   const v = video;
