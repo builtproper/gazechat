@@ -360,7 +360,7 @@ export class BeeperClient {
     cursor?: string
     direction?: 'after' | 'before'
     accountIDs?: string[]
-  }): Promise<{ chats: BeeperChat[]; cursor?: string }> {
+  }): Promise<{ chats: BeeperChat[]; cursor?: string; hasMore?: boolean }> {
     const params = new URLSearchParams()
     if (options?.cursor) params.set('cursor', options.cursor)
     if (options?.direction) params.set('direction', options.direction)
@@ -383,7 +383,37 @@ export class BeeperClient {
     return {
       chats: data.items || data.chats || [],
       cursor: data.oldestCursor || data.cursor,
+      hasMore: !!data.hasMore,
     }
+  }
+
+  /**
+   * Load chats across Beeper's pagination until `max` are collected
+   * (a single page only yields ~25). Follows `oldestCursor` with
+   * direction=before; stops early when Beeper reports no more pages.
+   */
+  async listChatsUpTo(
+    max: number,
+    options?: { accountIDs?: string[] },
+  ): Promise<{ chats: BeeperChat[]; cursor?: string }> {
+    const all: BeeperChat[] = []
+    let cursor: string | undefined
+    // hard page cap so a chatty cursor can never loop forever
+    for (let page = 0; page < 12; page++) {
+      const res = await this.listChats({
+        cursor,
+        direction: cursor ? 'before' : undefined,
+        accountIDs: options?.accountIDs,
+      })
+      if (!res.chats.length) break
+      all.push(...res.chats)
+      cursor = res.cursor
+      if (all.length >= max || !res.hasMore || !cursor) break
+    }
+    // dedupe by id (cursors can overlap by one entry)
+    const seen = new Set<string>()
+    const chats = all.filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)))
+    return { chats: chats.slice(0, max), cursor }
   }
 
   /**

@@ -1283,7 +1283,9 @@ function getMaxIndex(state: AppState, chatFilter: "normal" | "low" | "archived" 
       return Math.max(0, uniqueAccounts.size); // +1 for "All Chats" at index 0
     }
     case "chats":
-      return Math.max(0, filterChats(state.chats, chatFilter).length);
+      // NOTE: no +1 anymore — the old "All Platforms" row at index 0 is gone;
+      // returning length here let the cursor run onto a phantom row (02.11.)
+      return Math.max(0, filterChats(state.chats, chatFilter).length - 1);
         case "messages":
           return Math.max(0, state.messages.length - 1);
         case "quickReply":
@@ -2854,7 +2856,7 @@ export function GlassesUI({
 
       try {
         // Load chats for the saved account (or all chats if no specific account)
-        const result = await client.listChats(
+        const result = await client.listChatsUpTo(60,
           savedAccountId ? { accountIDs: [savedAccountId] } : undefined,
         );
         const loadedChats = result.chats;
@@ -3365,7 +3367,7 @@ export function GlassesUI({
         throw new Error("Beeper is not configured");
       }
 
-      const result = await beeper.listChats(
+      const result = await beeper.listChatsUpTo(60,
         accountId ? { accountIDs: [accountId] } : undefined,
       );
       const finalChats = result.chats;
