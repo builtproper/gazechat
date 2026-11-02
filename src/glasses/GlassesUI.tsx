@@ -3944,12 +3944,10 @@ export function GlassesUI({
         if (it.blocks > 1) timeLines.push(`${it.block + 1}/${it.blocks}`);
         const focused = focus === slotIdx[i];
         const tlines = timeLines.filter(Boolean);
-        if (focused) {
-          const last = tlines[tlines.length - 1] ?? "";
-          if (textPx(last + " \u25C0") <= TIME_W - 4) tlines[tlines.length - 1] = last + " \u25C0";
-          else tlines.push("\u25C0");
-        }
-        const timeTxt = tlines.join("\n");
+        // the firmware only re-renders (and applies textColor) when the
+        // content string actually differs — a trailing space is the invisible
+        // content change that lets brightness ride upgrades without a marker
+        const timeTxt = tlines.join("\n") + (focused ? " " : "");
         // natural height per message (pages are packed by height); focus mode
         // gives the single message the whole area
         const bh = layout.focus ? MSG_AREA_H : it.lines.length * MSG_LINE_H + MSG_RESERVE;
@@ -3957,7 +3955,7 @@ export function GlassesUI({
         const tx = isMine ? 574 - TIME_W : 0;
         const th = tlines.length * MSG_LINE_H + MSG_RESERVE;
         const bright = focus === slotIdx[i] ? 4 : 2;
-        return { bubble: it.lines.join("\n"), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
+        return { bubble: it.lines.join("\n") + (focused ? " " : ""), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
       });
       // stack slots top-down at their natural heights; center time beside bubble
       let y = MSG_AREA_Y;
@@ -3975,7 +3973,7 @@ export function GlassesUI({
       composeMirror = () => {
         const b = glassesBridgeRef.current;
         if (!b) return;
-        const txt = composeText ? composeWindow() : "Type on your phone or tap to record or transcribe" + (focus < 0 ? " \u25B6" : "");
+        const txt = composeText ? composeWindow() : "Type on your phone or tap to record or transcribe";
         void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt, textColor: composeText ? 4 : 0 }));
       };
       // pad so the name starts clear of the avatar image (x 70..104)
@@ -3998,7 +3996,7 @@ export function GlassesUI({
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, slots[1].bright === 4 ? 2 : 1),
         mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0, slots[2].bright),
         mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, slots[2].th, slots[2].time, 0, slots[2].bright === 4 ? 2 : 1),
-        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? composeWindow() : "Type on your phone or tap to record or transcribe" + (focus < 0 ? " \u25B6" : ""), textColor: composeText ? 4 : 0, zOrderIndex: 11 }),
+        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? composeWindow() : "Type on your phone or tap to record or transcribe", textColor: composeText ? 4 : 0, zOrderIndex: 11 }),
       ];
 
       if (needRebuild) {
