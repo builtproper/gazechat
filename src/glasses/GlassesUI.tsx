@@ -705,7 +705,7 @@ async function getMediaLabel(chat: any, client: any): Promise<string> {
     if (t === "IMAGE") label = "📷 Photo";
     else if (t === "VIDEO") label = "🎬 Video";
     else if (t === "AUDIO") label = "🎵 Audio";
-    else if (t === "VOICE") label = "🎤 Voice";
+    else if (t === "VOICE") label = "🎤 Voice Message";
     else if (t === "FILE") label = "📎 Attachment";
     else if (t === "STICKER") label = "Sticker";
     else if (t === "LOCATION") label = "Location";
