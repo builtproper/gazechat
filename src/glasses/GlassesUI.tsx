@@ -2127,6 +2127,12 @@ export function GlassesUI({
   const beeperBaseRef = useRef<string | undefined>(beeperConfig?.baseUrl);
   beeperBaseRef.current = beeperConfig?.baseUrl;
   const chatFilterRef = useRef<"normal" | "low" | "archived">("normal");
+  // lazy chat paging: one 25-chat page at a time; `+` marks "more exist"
+  const chatCursorRef = useRef<string | null>(null);
+  const chatHasMoreRef = useRef<boolean>(false);
+  const chatLoadingMoreRef = useRef<boolean>(false);
+  // background poll result waiting to be applied by a pull-up at the top
+  const pendingChatsRef = useRef<{ chats: BeeperChat[]; cursor: string | null; hasMore: boolean } | null>(null);
   const msgBlockRef = useRef<number>(0);
   const msgFocusRef = useRef<number>(-1); // focused msg index, -1 = mic
   const micDimRef = useRef<boolean>(false);
@@ -3044,16 +3050,22 @@ export function GlassesUI({
         if (nativeOverlayScreenRef.current) {
           return;
         }
-        // don't poll while the list isn't visible: opening a chat marks it
-        // read → the poll reordered the list and rebuilt the whole page
-        // (avatar re-push = flash) right between tap and message view
+        // SPARING poll (Joel 02.11.): only while sitting on page 1 / entry 1,
+        // and the result is only STASHED — it gets applied when the user
+        // pulls up at the top, never yanking the list around underneath them
         if (stateRef.current.currentScreen !== "chats") {
           return;
         }
-        await loadChats(state.selectedAccount, {
-          silent: true,
-          preserveExisting: true,
-        });
+        if (navRef.current.highlightedIndex !== 0) {
+          return;
+        }
+        if (!beeper) return;
+        const seq = ++chatCrawlSeq;
+        const res = await beeper.listChats(
+          state.selectedAccount ? { accountIDs: [state.selectedAccount] } : undefined,
+        );
+        if (seq !== chatCrawlSeq || !res.chats.length) return;
+        pendingChatsRef.current = { chats: res.chats, cursor: res.cursor ?? null, hasMore: !!res.hasMore };
       } catch (e) {
         console.warn("[GlassesUI] Chat polling failed:", e);
       } finally {
@@ -3439,22 +3451,15 @@ export function GlassesUI({
         throw new Error("Beeper is not configured");
       }
 
-      const applyChats = (list: typeof state.chats, loading: boolean | undefined) => {
-        if (seq !== chatCrawlSeq) return; // a newer crawl (re)started — stale result
-        setState((s) => {
-          const sameChats = areChatsEqual(s.chats, list);
-          const sameLoading = loading === undefined ? true : s.isLoading === loading;
-          const sameSetup = !s.setupRequired;
-          if (sameChats && sameLoading && sameSetup) return s;
-          return { ...s, chats: list, isLoading: loading ?? s.isLoading, setupRequired: false };
-        });
-      };
-      const result = await beeper.listChatsUpTo(75,
+      // ONE page (25) up front — the rest loads on demand at the bottom.
+      // (Eagerly crawling 75 tripped the gateway rate limit and raced the
+      // poll → the page count flickered and stalled at ~4 pages.)
+      const result = await beeper.listChats(
         accountId ? { accountIDs: [accountId] } : undefined,
-        // first page lands immediately (cold start used to sit on "No chats"
-        // until all 3 pages had crawled through)
-        (partial) => applyChats(partial, partial.length ? false : undefined),
       );
+      if (seq !== chatCrawlSeq) return;
+      chatCursorRef.current = result.cursor ?? null;
+      chatHasMoreRef.current = !!result.hasMore;
       const finalChats = result.chats;
       // PROBE (one-time): log the real fields the live API returns, so we know
       // whether avatars (participants[].imgURL) and last-message previews exist.
@@ -3469,7 +3474,13 @@ export function GlassesUI({
         console.log("[probe] participant keys:", p ? Object.keys(p).join(",") : "NONE");
         console.log("[probe] imgURL:", p?.imgURL ?? "NONE");
       }
-      applyChats(finalChats, options?.silent ? undefined : false);
+      setState((st) => {
+        const sameChats = areChatsEqual(st.chats, finalChats);
+        const sameLoading = options?.silent ? true : st.isLoading === false;
+        const sameSetup = !st.setupRequired;
+        if (sameChats && sameLoading && sameSetup) return st;
+        return { ...st, chats: finalChats, isLoading: options?.silent ? st.isLoading : false, setupRequired: false };
+      });
     } catch {
       // a FAILED background poll must not wipe a populated list (that flashed
       // "No chats" until the next poll restored it) — only an initial load
@@ -3490,6 +3501,27 @@ export function GlassesUI({
           setupRequired: true,
         };
       });
+    }
+  }
+
+  // fetch the next 25-chat page and append (lazy paging at the bottom)
+  async function loadMoreChats() {
+    if (!beeper || chatLoadingMoreRef.current || !chatCursorRef.current) return;
+    chatLoadingMoreRef.current = true;
+    try {
+      const res = await beeper.listChats({ cursor: chatCursorRef.current, direction: "before" });
+      if (!res.chats.length) { chatHasMoreRef.current = false; return; }
+      setState((st) => {
+        const seen = new Set(st.chats.map((c) => c.id));
+        const merged = [...st.chats, ...res.chats.filter((c) => !seen.has(c.id))];
+        return { ...st, chats: merged };
+      });
+      chatCursorRef.current = res.cursor ?? null;
+      chatHasMoreRef.current = !!res.hasMore && !!res.cursor;
+    } catch (e) {
+      console.warn("[chats] loadMore failed:", String(e).slice(0, 80));
+    } finally {
+      chatLoadingMoreRef.current = false;
     }
   }
 
@@ -3788,6 +3820,9 @@ export function GlassesUI({
             // landing back on the mic only makes sense from the true newest
             if (focus < 0 && newFocus === messages.length - 1 && eff === newFocus) newFocus = -1;
             newFocus = Math.max(-1, Math.min(newFocus, messages.length - 1));
+            if ((messages[eff] && (messages[eff].type || "").toUpperCase() === "VIDEO") || (messages[newFocus] && (messages[newFocus].type || "").toUpperCase() === "VIDEO")) {
+              console.log("[vidscroll]", JSON.stringify({ focus, eff, newFocus, down, pStart: p.start, pEnd: p.end, pages: pages.length, pi: pages.indexOf(p), last: messages.length - 1 }));
+            }
             if (newFocus !== focus || newBlock !== msgBlockRef.current) {
               msgBlockRef.current = newBlock;
               msgFocusRef.current = newFocus;
@@ -3803,6 +3838,16 @@ export function GlassesUI({
           }
 
           const maxIdx = getMaxIndex(snapshot, chatFilterRef.current);
+          // pull UP at the very top: apply a pending poll refresh (if any)
+          if (action.direction === "up" && nav.highlightedIndex === 0 && pendingChatsRef.current) {
+            const pend = pendingChatsRef.current;
+            pendingChatsRef.current = null;
+            chatCursorRef.current = pend.cursor;
+            chatHasMoreRef.current = pend.hasMore;
+            setState((st) => ({ ...st, chats: pend.chats }));
+            chatPageSigRef.current = ""; // force list rebuild with fresh data
+            return nav;
+          }
           const newIdx = Math.max(
             0,
             Math.min(
@@ -3810,6 +3855,14 @@ export function GlassesUI({
               nav.highlightedIndex + (action.direction === "down" ? 1 : -1),
             ),
           );
+          // lazy paging: entering the LAST page triggers the next fetch once
+          if (action.direction === "down" && chatHasMoreRef.current) {
+            const shown = filterChats(snapshot.chats, chatFilterRef.current).length;
+            const lastPageFirstIdx = Math.max(0, Math.ceil(shown / 5) * 5 - 5);
+            if (newIdx >= lastPageFirstIdx && newIdx >= shown - 5) {
+              void loadMoreChats();
+            }
+          }
           return { ...nav, highlightedIndex: newIdx };
         }
 
@@ -4320,7 +4373,8 @@ export function GlassesUI({
       // overflows — overflow made the firmware scroll-jump on every upgrade
       const markerText = empty ? " " : markCol.map((m) => `${m}\n `).join("\n").replace(/\n $/, "");
       const labelText = filterLabel(filter);
-      const xyRaw = `${page + 1}/${totalPages}`;
+      const more = chatHasMoreRef.current && page === totalPages - 1;
+      const xyRaw = `${page + 1}/${totalPages}${more ? "+" : ""}`;
       // center with leading spaces: (54px column - text) / 2 / 6px per space
       const xyPad = Math.max(0, Math.round((54 - textPx(xyRaw)) / 12));
       const xyText = " ".repeat(xyPad) + xyRaw;
@@ -4570,6 +4624,9 @@ export function GlassesUI({
             if (chatFilterRef.current !== next) {
               chatFilterRef.current = next;
               chatPageSigRef.current = "";
+              pendingChatsRef.current = null;
+              chatCursorRef.current = null;
+              chatHasMoreRef.current = false;
               navRef.current = { ...navRef.current, highlightedIndex: 0 };
               setNavVersion((v) => v + 1);
               void flushGlassesDisplay();
