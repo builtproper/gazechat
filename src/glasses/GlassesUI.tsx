@@ -1029,12 +1029,18 @@ function videoAssetUrl(m: BeeperMessage, baseUrl: string | undefined): string | 
 // 10 slots = 10% steps; played slots become ▒ (U+2592 medium shade), empty
 // slots are ▁ (U+2581 bottom hairline). Both share the ~20px device advance
 // (space would be 6px → drifting line), so the width stays constant.
+// fullwidth digits (U+FF10–FF19) are equal-width by Unicode design — IF the
+// firmware font contains them (U+3000 was missing on device, so this is a
+// live test; VID_FW_DIGITS=false reverts to the proportional ASCII digits)
+const VID_FW_DIGITS = true;
+const fwDigits = (t: string) =>
+  VID_FW_DIGITS ? t.replace(/[0-9]/g, (d) => String.fromCharCode(0xff10 + Number(d))) : t;
 function videoTransportLine(pos: number, dur: number, playing: boolean): string {
   const slots = 10;
   const n = dur > 0 ? Math.max(0, Math.min(slots, Math.round((pos / dur) * slots))) : 0;
   const bar = "\u2592".repeat(n) + "\u2581".repeat(slots - n);
   const icon = playing ? "||" : "\u25B7";
-  return `${icon} ${fmtDur(pos)}  ${bar}  ${fmtDur(dur)}`;
+  return `${icon} ${fwDigits(fmtDur(pos))}  ${bar}  ${fwDigits(fmtDur(dur))}`;
 }
 function fmtDur(sec: number): string {
   if (!isFinite(sec) || sec < 0) sec = 0;
