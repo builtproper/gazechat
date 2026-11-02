@@ -4,7 +4,7 @@
  * Image containers are capped at 288x144 px, so a focused photo fills the
  * message area (y84..244) with 1-2 containers depending on aspect ratio:
  *   aspect >= 2    → wide:   two side by side (574x144 box)
- *   aspect <= 0.9  → tall:   two stacked (288x160 box)
+ *   aspect <= 1.44 → tall:   two stacked (288x200 box, full area)
  *   otherwise      → single: one container (288x144)
  * The bitmap is contain-fit onto the box, quantized to the panel's 16 gray
  * levels (lossless for what the display can show) and sliced to the exact
@@ -26,10 +26,11 @@ export function imgLayout(aspect: number): ImgLayout {
       { x: 287, y: 96, w: 287, h: 144 },
     ] };
   }
-  if (aspect <= 0.9) {
+  if (aspect <= 1.44) {
+    // full message-area height (y44..244): portrait photos fill much better
     return { mode: "tall", boxes: [
-      { x: 143, y: 84, w: 288, h: 80 },
-      { x: 143, y: 164, w: 288, h: 80 },
+      { x: 143, y: 44, w: 288, h: 100 },
+      { x: 143, y: 144, w: 288, h: 100 },
     ] };
   }
   return { mode: "single", boxes: [
@@ -53,7 +54,7 @@ export async function renderImageSlices(
   layout: ImgLayout,
 ): Promise<number[][]> {
   const boxW = layout.mode === "wide" ? 574 : layout.mode === "tall" ? 288 : 288;
-  const boxH = layout.mode === "wide" ? 144 : layout.mode === "tall" ? 160 : 144;
+  const boxH = layout.mode === "wide" ? 144 : layout.mode === "tall" ? 200 : 144;
   const scale = Math.min(boxW / bmp.width, boxH / bmp.height);
   const w = Math.max(1, Math.round(bmp.width * scale));
   const h = Math.max(1, Math.round(bmp.height * scale));
