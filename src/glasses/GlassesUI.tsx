@@ -935,7 +935,7 @@ function reactionText(m: BeeperMessage): string {
     ?? (typeof last.emoji === "string" ? last.emoji : "");
   return key ? " " + key : "";
 }
-const MSG_TIME_W = 101;
+const MSG_TIME_W = 106;
 // bubble width shared by wrap calc and layout (full width minus time column)
 const MSG_BUB_W = 574 - MSG_TIME_W - 4;
 function msgGeom(_isMine: boolean) {
