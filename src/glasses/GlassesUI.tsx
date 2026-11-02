@@ -3946,9 +3946,15 @@ export function GlassesUI({
             if (eff >= 0 && ownsPage(messages[eff], messages) && blocksOf(messages[eff]) > 1) {
               // paging inside a tall focused message
               const nb = blocksOf(messages[eff]);
-              if (down && newBlock < nb - 1) newBlock++;
-              else if (!down && newBlock > 0) newBlock--;
-              else if (down) { newFocus = eff < messages.length - 1 ? eff + 1 : -1; newBlock = 0; } // → next msg / mic
+              if (down && focus >= 0 && newBlock < nb - 1) newBlock++;
+              else if (!down && focus >= 0 && newBlock > 0) newBlock--;
+              else if (!down && focus < 0) { newFocus = eff; newBlock = nb - 1; } // mic → back onto the message at its last block
+              else if (down) {
+                // past the last block: next message, or the MIC — keeping the
+                // last block visible (dimmed) instead of jumping back to 1/6
+                if (eff < messages.length - 1) { newFocus = eff + 1; newBlock = 0; }
+                else { newFocus = -1; newBlock = nb - 1; }
+              }
               else { const pi = pages.indexOf(p); newFocus = pi >= 0 && pi < pages.length - 1 ? pages[pi + 1].end : eff; }
             } else if (down) {
               // walk toward the mic one message at a time so you can always
