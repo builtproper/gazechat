@@ -3947,6 +3947,7 @@ export function GlassesUI({
         // NO focus toggle here: a trailing space could push a just-fitting
         // date line over the wrap limit. Time brightness is constant (the
         // bubble carries the focus signal).
+        const timeTxt = tlines.join("\n");
         // natural height per message (pages are packed by height); focus mode
         // gives the single message the whole area
         const bh = layout.focus ? MSG_AREA_H : it.lines.length * MSG_LINE_H + MSG_RESERVE;
