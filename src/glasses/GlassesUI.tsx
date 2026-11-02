@@ -3523,10 +3523,13 @@ export function GlassesUI({
 
   // fetch the next 25-chat page and append (lazy paging at the bottom)
   async function loadMoreChats() {
-    if (!beeper || chatLoadingMoreRef.current || !chatCursorRef.current) return;
+    // read the client from the REF: called from the memoized scroll handler,
+    // whose closure `beeper` is the (still null) first-render value
+    const client = beeperRef.current;
+    if (!client || chatLoadingMoreRef.current || !chatCursorRef.current) return;
     chatLoadingMoreRef.current = true;
     try {
-      const res = await beeper.listChats({ cursor: chatCursorRef.current, direction: "before" });
+      const res = await client.listChats({ cursor: chatCursorRef.current, direction: "before" });
       if (!res.chats.length) { chatHasMoreRef.current = false; return; }
       setState((st) => {
         const seen = new Set(st.chats.map((c) => c.id));
@@ -3555,13 +3558,15 @@ export function GlassesUI({
       const older = res.messages
         .filter((m) => (m.type || "").toUpperCase() !== "REACTION" && !(m as { isHidden?: boolean }).isHidden)
         .reverse();
+      const seen = new Set(stateRef.current.messages.map((m) => m.id));
+      const fresh = older.filter((m) => !seen.has(m.id));
+      if (!fresh.length) return;
+      // keep the focused message under the cursor after the prepend —
+      // OUTSIDE the updater: StrictMode invokes updaters twice, a ref bump
+      // inside shifted focus by 2×page and jumped to the newest message
+      if (msgFocusRef.current >= 0) msgFocusRef.current += fresh.length;
       setState((st) => {
         if (st.selectedChat !== chatId) return st;
-        const seen = new Set(st.messages.map((m) => m.id));
-        const fresh = older.filter((m) => !seen.has(m.id));
-        if (!fresh.length) return st;
-        // keep the focused message under the cursor after the prepend
-        if (msgFocusRef.current >= 0) msgFocusRef.current += fresh.length;
         return { ...st, messages: [...fresh, ...st.messages] };
       });
       msgCursorRef.current = res.cursor ?? null;
@@ -3916,8 +3921,8 @@ export function GlassesUI({
           // lazy paging: entering the LAST page triggers the next fetch once
           if (action.direction === "down" && chatHasMoreRef.current) {
             const shown = filterChats(snapshot.chats, chatFilterRef.current).length;
-            const lastPageFirstIdx = Math.max(0, Math.ceil(shown / 5) * 5 - 5);
-            if (newIdx >= lastPageFirstIdx && newIdx >= shown - 5) {
+            // on the last visible page: every down-scroll checks & loads more
+            if (newIdx >= shown - 5) {
               void loadMoreChats();
             }
           }
