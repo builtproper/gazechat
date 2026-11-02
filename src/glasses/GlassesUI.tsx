@@ -4432,16 +4432,21 @@ export function GlassesUI({
         new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 1, yPosition: 2, width: 574, height: 38, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 0, zOrderIndex: 1 }),
         mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, imgFocus ? " " : slots[0].bubble, slots[0].show ? 1 : 0, slots[0].bright),
         mk(3, "time0", slots[0].tx, TIME_W, slots[0].timeY, slots[0].th, slots[0].time, 0, slots[0].bright === 4 ? 2 : 1),
-        mk(4, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0, slots[1].bright),
-        mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, slots[1].bright === 4 ? 2 : 1),
-        mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0, slots[2].bright),
-        mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, slots[2].th, slots[2].time, 0, slots[2].bright === 4 ? 2 : 1),
+        // focus mode shows ONE message → the other four slots are NOT created
+        // at all; borderless parked boxes flashed as a ghost container on the
+        // first open of a multi-block chat (02.11.)
+        ...(layout.focus ? [] : [
+          mk(4, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0, slots[1].bright),
+          mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, slots[1].bright === 4 ? 2 : 1),
+          mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0, slots[2].bright),
+          mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, slots[2].th, slots[2].time, 0, slots[2].bright === 4 ? 2 : 1),
+        ]),
         new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? composeWindow() : inputHint(), textColor: composeText ? 4 : 0, isEventCapture: 1, zOrderIndex: 11 }),
       ];
 
       if (needRebuild) {
         const rb = await bridge.rebuildPageContainer(new RebuildPageContainer({
-          containerTotalNum: 10 + (videoFocus ? 1 : 0) + (imgLayout ? imgLayout.boxes.length : 0),
+          containerTotalNum: (layout.focus ? 6 : 10) + (videoFocus ? 1 : 0) + (imgLayout ? imgLayout.boxes.length : 0),
           menuObject: new MenuContainerProperty({
             menuItems: [
               new MenuItemProperty({ itemName: "Chats", itemID: MENU_CHATS }),
@@ -4483,10 +4488,12 @@ export function GlassesUI({
         [1, "topbar", textObject[0].content ?? "", undefined],
         [2, "bub0", textObject[1].content ?? "", slots[0].bright],
         [3, "time0", textObject[2].content ?? "", slots[0].bright === 4 ? 2 : 1],
-        [4, "bub1", textObject[3].content ?? "", slots[1].bright],
-        [5, "time1", textObject[4].content ?? "", slots[1].bright === 4 ? 2 : 1],
-        [6, "bub2", textObject[5].content ?? "", slots[2].bright],
-        [7, "time2", textObject[6].content ?? "", slots[2].bright === 4 ? 2 : 1],
+        ...(layout.focus ? [] : [
+          [4, "bub1", textObject[3].content ?? "", slots[1].bright] as [number, string, string, number | undefined],
+          [5, "time1", textObject[4].content ?? "", slots[1].bright === 4 ? 2 : 1] as [number, string, string, number | undefined],
+          [6, "bub2", textObject[5].content ?? "", slots[2].bright] as [number, string, string, number | undefined],
+          [7, "time2", textObject[6].content ?? "", slots[2].bright === 4 ? 2 : 1] as [number, string, string, number | undefined],
+        ]),
       ];
       for (const [id, name, content, bright] of defs) {
         const key = `${content}@@${bright}`;
