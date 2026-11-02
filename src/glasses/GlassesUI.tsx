@@ -3965,7 +3965,11 @@ export function GlassesUI({
                   if (!b || videoMsgIdRef.current !== vidId || stateRef.current.currentScreen !== "messages") {
                     throw new Error("video preview superseded");
                   }
-                  await b.updateImageRawData(new ImageRawDataUpdate({ containerID: 14, containerName: "vid", imageData: bytes }));
+                  const r = await b.updateImageRawData(new ImageRawDataUpdate({ containerID: 14, containerName: "vid", imageData: bytes }));
+                  // SDK returns "success" or an error token (imageException /
+                  // imageToGray4Failed / sendFailed) — the loop uses false to
+                  // downgrade JPEG→PNG once
+                  return r === "success" || (r as any) === true;
                 });
                 videoLoopingRef.current = true;
               }

@@ -13,7 +13,7 @@
 export const VID_W = 288;
 export const VID_H = 144;
 
-export type FrameSender = (pngBytes: number[]) => Promise<void>;
+export type FrameSender = (imgBytes: number[]) => Promise<boolean>;
 
 let video: HTMLVideoElement | null = null;
 let canvas: HTMLCanvasElement | null = null;
@@ -23,6 +23,9 @@ let audioOn = false;
 let inFlight = false;
 let rafId = 0;
 let sendFrame: FrameSender | null = null;
+// JPEG encodes ~5-10x faster than PNG; if the host rejects it (only PNG is
+// documented), the first failed frame flips this back to PNG automatically
+let useJpeg = true;
 
 function ensureEls(): { v: HTMLVideoElement; c: HTMLCanvasElement } | null {
   if (typeof document === "undefined") return null;
@@ -51,7 +54,7 @@ function ensureEls(): { v: HTMLVideoElement; c: HTMLCanvasElement } | null {
  *  (~165k iterations/frame) was redundant CPU that capped the phone at ~0.7 fps.
  *  ctx.filter does the greyscale natively; if a WebView lacks it the color PNG
  *  still renders (host discards chroma). */
-function grabFrame(c: HTMLCanvasElement): number[] | null {
+function grabFrame(c: HTMLCanvasElement, forcePng = false): number[] | null {
   const v = video!;
   if (!v.videoWidth || !v.videoHeight) return null;
   const ctx = c.getContext("2d")!;
@@ -63,7 +66,7 @@ function grabFrame(c: HTMLCanvasElement): number[] | null {
   ctx.filter = "grayscale(1)";
   ctx.drawImage(v, (VID_W - w) / 2, (VID_H - h) / 2, w, h);
   ctx.filter = "none";
-  const url = c.toDataURL("image/png");
+  const url = useJpeg && !forcePng ? c.toDataURL("image/jpeg", 0.82) : c.toDataURL("image/png");
   return Array.from(atob(url.split(",")[1] || ""), (ch) => ch.charCodeAt(0));
 }
 
@@ -73,7 +76,14 @@ async function pump() {
   inFlight = true;
   try {
     const bytes = grabFrame(canvas);
-    if (bytes) await sendFrame(bytes);
+    if (bytes) {
+      const ok = await sendFrame(bytes);
+      if (!ok && useJpeg) {
+        useJpeg = false; // host rejected JPEG (or hiccup): retry once with PNG
+        const retry = grabFrame(canvas);
+        if (retry) await sendFrame(retry).catch(() => false);
+      }
+    }
   } catch { /* superseded or hiccup: stopLoop ends the loop via running */ }
   inFlight = false;
 }
@@ -108,7 +118,7 @@ export async function posterFrame(): Promise<number[] | null> {
   if (v.readyState < 2) await new Promise((r) => { v.addEventListener("loadeddata", r, { once: true }); });
   try { v.currentTime = Math.min(0.5, (v.duration || 1) / 3); } catch { /* some sources refuse */ }
   await new Promise((r) => { v.addEventListener("seeked", r, { once: true }); setTimeout(r, 600); });
-  return grabFrame(els.c);
+  return grabFrame(els.c, true);
 }
 
 /** Start the ~5 fps loop. The sender must await the actual BLE write. */
