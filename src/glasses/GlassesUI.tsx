@@ -49,7 +49,7 @@ import type { SpeechApiConfig } from "../services";
 import { getApiConfig } from "../services/config";
 import {
   loadVideo, posterFrame, startLoop, stopLoop, unloadVideo,
-  setPreviewAudio, VID_W, VID_H,
+  setPreviewAudio, videoCurrentTime, VID_W, VID_H,
 } from "./videoPreview";
 
 // ═══════════════════════════════════════════════════════════════
@@ -1024,9 +1024,22 @@ function videoAssetUrl(m: BeeperMessage, baseUrl: string | undefined): string | 
     return buildBeeperAssetUrl(normalizeBeeperBaseUrl(baseUrl), raw);
   } catch { return null; }
 }
+// one-line transport inside the video bubble, bottom row:
+//   "▷ 00:00  ▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏▏  01:23"
+// 20 slots = 5% steps; played slots become ▏ (U+258F, full-height tick),
+// empty slots are ▁ (U+2581, bottom hairline track). Both share the 20px
+// device advance (space would be 6px → drifting line), so the total width
+// stays constant while filling.
+function videoTransportLine(pos: number, dur: number, playing: boolean): string {
+  const slots = 20;
+  const n = dur > 0 ? Math.max(0, Math.min(slots, Math.round((pos / dur) * slots))) : 0;
+  const bar = "\u258F".repeat(n) + "\u2581".repeat(slots - n);
+  const icon = playing ? "||" : "\u25B7";
+  return `${icon} ${fmtDur(pos)}  ${bar}  ${fmtDur(dur)}`;
+}
 function fmtDur(sec: number): string {
-  if (!isFinite(sec) || sec <= 0) return "";
-  const m = Math.floor(sec / 60), r = Math.round(sec % 60);
+  if (!isFinite(sec) || sec < 0) sec = 0;
+  const m = Math.floor(sec / 60), r = Math.floor(sec % 60);
   return `${m}:${String(r).padStart(2, "0")}`;
 }
 function isMediaMsg(m: BeeperMessage): boolean {
@@ -2111,6 +2124,7 @@ export function GlassesUI({
   const micDimRef = useRef<boolean>(false);
   const videoMsgIdRef = useRef<string | null>(null);
   const videoDurRef = useRef<number>(0);
+  const videoPosRef = useRef<number>(0);
   const audioOnRef = useRef<boolean>(false);
   const videoLoopingRef = useRef<boolean>(false);
   const msgTopNameRef = useRef<string>("");
@@ -4082,7 +4096,7 @@ export function GlassesUI({
         const timeTxt = tlines.join("\n") + pad;
         // natural height per message (pages are packed by height); focus mode
         // gives the single message the whole area
-        const bh = layout.focus ? (isVid ? 40 : MSG_AREA_H) : it.lines.length * MSG_LINE_H + MSG_RESERVE;
+        const bh = layout.focus ? MSG_AREA_H : it.lines.length * MSG_LINE_H + MSG_RESERVE;
         const bx = isMine ? 0 : TIME_W + 4;
         const tx = isMine ? 574 - TIME_W : 0;
         const th = tlines.length * MSG_LINE_H + MSG_RESERVE;
@@ -4091,7 +4105,10 @@ export function GlassesUI({
         // bubble gets an invisible trailing space (wrap-safe: lines break at
         // bubbleW−14, the 6px space fits in the reserve). Never do this in
         // the time container — its lines sit right at the wrap limit.
-        return { bubble: isVid ? `${fmtDur(videoDurRef.current)} · ` + (videoLoopingRef.current ? "|| pause" : "> play") : it.lines.join("\n") + (bright === 4 ? " " : ""), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
+        const vidBody = isVid
+          ? "\n".repeat(5) + videoTransportLine(videoPosRef.current, videoDurRef.current, videoLoopingRef.current)
+          : it.lines.join("\n");
+        return { bubble: vidBody + (bright === 4 ? " " : ""), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
       });
       // stack slots top-down at their natural heights; center time beside bubble
       let y = MSG_AREA_Y;
@@ -4130,7 +4147,7 @@ export function GlassesUI({
         new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 1, yPosition: 2, width: 574, height: 38, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 0, zOrderIndex: 1 }),
         mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show && !videoFocus ? 1 : 0, slots[0].bright),
         mk(3, "time0", slots[0].tx, TIME_W, slots[0].timeY, slots[0].th, slots[0].time, 0, slots[0].bright === 4 ? 2 : 1),
-        mk(4, "bub1", ...(videoFocus ? ([142, 292, 86, 148, " ", 1, 1] as const) : ([slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0, slots[1].bright] as const))),
+        mk(4, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0, slots[1].bright),
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, slots[1].bright === 4 ? 2 : 1),
         mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0, slots[2].bright),
         mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, slots[2].th, slots[2].time, 0, slots[2].bright === 4 ? 2 : 1),
@@ -4152,7 +4169,7 @@ export function GlassesUI({
           imageObject: [
             new ImageContainerProperty({ containerID: 8, containerName: "topav", xPosition: 70, yPosition: 4, width: 34, height: 34, zOrderIndex: 8 }),
             new ImageContainerProperty({ containerID: 12, containerName: "mic", xPosition: 540, yPosition: 250, width: 34, height: 34, zOrderIndex: 12 }),
-            ...(videoFocus ? [new ImageContainerProperty({ containerID: 14, containerName: "vid", xPosition: 144, yPosition: 88, width: VID_W, height: VID_H, zOrderIndex: 14 })] : []),
+            ...(videoFocus ? [new ImageContainerProperty({ containerID: 14, containerName: "vid", xPosition: 143, yPosition: 46, width: VID_W, height: VID_H, zOrderIndex: 14 })] : []),
           ],
           listObject: [],
         }));
@@ -4191,7 +4208,9 @@ export function GlassesUI({
       }
       if (videoFocus && videoMsgIdRef.current !== items[0].msg.id) {
         void setupVideoPreview(bridge, items[0].msg);
-      } else if (!videoFocus && videoMsgIdRef.current) {
+      } else if (videoFocus) {
+        videoPosRef.current = videoCurrentTime();
+      } else if (videoMsgIdRef.current) {
         unloadVideo();
         videoLoopingRef.current = false;
         videoMsgIdRef.current = null;
@@ -4419,6 +4438,18 @@ export function GlassesUI({
       }
     }
   }, [ensureGlassesStartup, getDisplayLines, renderChatsPage, renderTextPage]);
+
+  // transport ticker: refresh position + progress bar once per second while
+  // a video preview loops (the message poll stays silent when nothing changed)
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      if (stateRef.current.currentScreen === "messages" && videoLoopingRef.current && videoMsgIdRef.current) {
+        videoPosRef.current = videoCurrentTime();
+        setState((st) => ({ ...st }));
+      }
+    }, 1000);
+    return () => clearInterval(id);
+  }, []);
 
   useEffect(() => {
     navRef.current.screen = state.currentScreen;

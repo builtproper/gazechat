@@ -129,6 +129,7 @@ export function startLoop(sender: FrameSender) {
   sendFrame = sender;
   running = true;
   video.muted = !audioOn;
+  if (video.ended) { try { video.currentTime = 0; } catch { /* ignore */ } }
   void video.play().catch(() => { /* autoplay blocked: poster stays */ });
   scheduleNext();
 }
@@ -155,6 +156,7 @@ export function togglePlay(): boolean {
   return !video.paused;
 }
 export function videoTime(): number { return video?.currentTime || 0; }
+export { videoTime as videoCurrentTime };
 export function unloadVideo() {
   stopLoop();
   if (objUrl) { try { URL.revokeObjectURL(objUrl); } catch { /* ignore */ } objUrl = null; }
