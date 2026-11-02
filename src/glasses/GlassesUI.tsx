@@ -2856,7 +2856,7 @@ export function GlassesUI({
 
       try {
         // Load chats for the saved account (or all chats if no specific account)
-        const result = await client.listChatsUpTo(60,
+        const result = await client.listChatsUpTo(75,
           savedAccountId ? { accountIDs: [savedAccountId] } : undefined,
         );
         const loadedChats = result.chats;
@@ -3367,7 +3367,7 @@ export function GlassesUI({
         throw new Error("Beeper is not configured");
       }
 
-      const result = await beeper.listChatsUpTo(60,
+      const result = await beeper.listChatsUpTo(75,
         accountId ? { accountIDs: [accountId] } : undefined,
       );
       const finalChats = result.chats;
