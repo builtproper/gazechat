@@ -406,11 +406,19 @@ export class BeeperClient {
     let cursor: string | undefined
     // hard page cap so a chatty cursor can never loop forever
     for (let page = 0; page < 12; page++) {
-      const res = await this.listChats({
-        cursor,
-        direction: cursor ? 'before' : undefined,
-        accountIDs: options?.accountIDs,
-      })
+      let res
+      try {
+        res = await this.listChats({
+          cursor,
+          direction: cursor ? 'before' : undefined,
+          accountIDs: options?.accountIDs,
+        })
+      } catch (e) {
+        // a failed follow-up page (rate limit, hiccup) must not discard the
+        // pages already in hand — only a failing FIRST page is a real error
+        if (all.length) break
+        throw e
+      }
       if (!res.chats.length) break
       for (const c of res.chats) {
         if (!seen.has(c.id)) { seen.add(c.id); all.push(c) }

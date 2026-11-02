@@ -727,6 +727,9 @@ async function getMediaLabel(chat: any, client: any): Promise<string> {
 }
 
 const avatarCache = new Map<string, string>(); // chatId -> dataURL of composed cell
+// chat crawls: only the newest crawl may write state (a poll racing the
+// cold-start crawl used to overwrite the full 75 with its partial 25)
+let chatCrawlSeq = 0;
 // avatar strip pushes: sequential chain + supersede counter (progressive render)
 let chatAvatarSeq = 0;
 let chatAvatarChain: Promise<void> = Promise.resolve();
@@ -3430,12 +3433,14 @@ export function GlassesUI({
       return;
     }
 
+    const seq = ++chatCrawlSeq;
     try {
       if (!beeper) {
         throw new Error("Beeper is not configured");
       }
 
       const applyChats = (list: typeof state.chats, loading: boolean | undefined) => {
+        if (seq !== chatCrawlSeq) return; // a newer crawl (re)started — stale result
         setState((s) => {
           const sameChats = areChatsEqual(s.chats, list);
           const sameLoading = loading === undefined ? true : s.isLoading === loading;
@@ -3469,6 +3474,7 @@ export function GlassesUI({
       // a FAILED background poll must not wipe a populated list (that flashed
       // "No chats" until the next poll restored it) — only an initial load
       // with nothing on screen yet may show the setup-required state
+      if (seq !== chatCrawlSeq) return;
       setState((s) => {
         if (s.chats.length > 0) {
           const sameLoading = options?.silent ? true : s.isLoading === false;
@@ -3746,34 +3752,41 @@ export function GlassesUI({
             const focus = Math.min(msgFocusRef.current, messages.length - 1);
             const down = action.direction === "down";
             const pages = buildMsgPages(messages);
-            const p = focus < 0 ? pages[0] : msgPageFor(pages, focus);
+            // mirror computeMsgLayout's override: with mic focus an oversized
+            // NEWEST message is already on screen → scroll from IT, not from -1
+            const eff = focus < 0 && messages.length && ownsPage(messages[messages.length - 1], messages)
+              ? messages.length - 1
+              : focus;
+            const p = eff < 0 ? pages[0] : msgPageFor(pages, eff);
             const blocksOf = (m: BeeperMessage) =>
               Math.max(1, Math.ceil(wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14).length / MSG_MAX_LINES));
-            let newFocus = focus;
+            let newFocus = eff;
             let newBlock = msgBlockRef.current;
             // block-paging only for tall TEXT (ownsPage + >1 block). A video or
             // single image owns its page but has ONE block → must use the normal
             // per-message path, else up-scroll at the page top does nothing (02.11.)
-            if (focus >= 0 && ownsPage(messages[focus], messages) && blocksOf(messages[focus]) > 1) {
+            if (eff >= 0 && ownsPage(messages[eff], messages) && blocksOf(messages[eff]) > 1) {
               // paging inside a tall focused message
-              const nb = blocksOf(messages[focus]);
+              const nb = blocksOf(messages[eff]);
               if (down && newBlock < nb - 1) newBlock++;
               else if (!down && newBlock > 0) newBlock--;
-              else if (down) { newFocus = focus < messages.length - 1 ? focus + 1 : -1; newBlock = newFocus >= 0 ? Math.max(0, blocksOf(messages[newFocus]) - 1) : 0; } // → next msg / mic
-              else { const pi = pages.indexOf(p); newFocus = pi < pages.length - 1 ? pages[pi + 1].end : focus; }
+              else if (down) { newFocus = eff < messages.length - 1 ? eff + 1 : -1; newBlock = newFocus >= 0 ? Math.max(0, blocksOf(messages[newFocus]) - 1) : 0; } // → next msg / mic
+              else { const pi = pages.indexOf(p); newFocus = pi >= 0 && pi < pages.length - 1 ? pages[pi + 1].end : eff; }
             } else if (down) {
               // walk toward the mic one message at a time so you can always
               // return to the input without re-scrolling the whole thread
-              if (focus < 0) { newFocus = -1; }
-              else if (focus < messages.length - 1) { newFocus = focus + 1; newBlock = 0; }
+              if (eff < 0) { newFocus = -1; }
+              else if (eff < messages.length - 1) { newFocus = eff + 1; newBlock = 0; }
               else { newFocus = -1; } // newest message → mic
               if (newFocus >= 0) newBlock = Math.max(0, blocksOf(messages[newFocus]) - 1);
             } else {
               // up
-              if (focus < 0) { newFocus = p.end; newBlock = Math.max(0, blocksOf(messages[p.end]) - 1); }
-              else if (focus > p.start) { newFocus = focus - 1; newBlock = Math.max(0, blocksOf(messages[focus - 1]) - 1); }
-              else { const pi = pages.indexOf(p); newFocus = pi < pages.length - 1 ? pages[pi + 1].end : focus; newBlock = 0; }
+              if (eff < 0) { newFocus = p.end; newBlock = Math.max(0, blocksOf(messages[p.end]) - 1); }
+              else if (eff > p.start) { newFocus = eff - 1; newBlock = Math.max(0, blocksOf(messages[eff - 1]) - 1); }
+              else { const pi = pages.indexOf(p); newFocus = pi >= 0 && pi < pages.length - 1 ? pages[pi + 1].end : eff; newBlock = 0; }
             }
+            // landing back on the mic only makes sense from the true newest
+            if (focus < 0 && newFocus === messages.length - 1 && eff === newFocus) newFocus = -1;
             newFocus = Math.max(-1, Math.min(newFocus, messages.length - 1));
             if (newFocus !== focus || newBlock !== msgBlockRef.current) {
               msgBlockRef.current = newBlock;
@@ -4056,20 +4069,29 @@ export function GlassesUI({
     videoDurRef.current = 0;
     const url = videoAssetUrl(m, beeperBaseRef.current);
     if (!url) return;
-    try {
-      const token = (await getApiConfig())?.token;
-      const res = await fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
-      if (!res.ok) return;
-      const blob = await res.blob();
-      const { duration } = await loadVideo(URL.createObjectURL(blob));
-      videoDurRef.current = duration;
-      const png = await posterFrame();
-      if (png && videoMsgIdRef.current === m.id) {
-        await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 14, containerName: "vid", imageData: png }));
-        setState((st) => ({ ...st })); // re-render: duration + hint
+    const attempt = async (): Promise<boolean> => {
+      try {
+        const token = (await getApiConfig())?.token;
+        const res = await fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+        if (!res.ok) return false;
+        const blob = await res.blob();
+        const { duration } = await loadVideo(URL.createObjectURL(blob));
+        videoDurRef.current = duration;
+        const png = await posterFrame();
+        if (png && videoMsgIdRef.current === m.id) {
+          await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 14, containerName: "vid", imageData: png }));
+          setState((st) => ({ ...st })); // re-render: duration + hint
+        }
+        return true;
+      } catch (e) {
+        console.warn("[vid] preview failed:", String(e).slice(0, 100));
+        return false;
       }
-    } catch (e) {
-      console.warn("[vid] preview failed:", String(e).slice(0, 100));
+    };
+    if (!(await attempt()) && videoMsgIdRef.current === m.id) {
+      // transient gateway hiccup (restart/rate limit): one retry after 600ms
+      await new Promise((r) => setTimeout(r, 600));
+      if (videoMsgIdRef.current === m.id) await attempt();
     }
   };
 
