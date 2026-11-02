@@ -4095,12 +4095,16 @@ export function GlassesUI({
 
       const markers = pageChats.map((_, i) => (startIdx + i === nav.highlightedIndex ? "\u25B6" : " "));
       const names = pageChats.map((c) => truncatePx(c.title, 420));
+      const pageSig = `${filter}|${page}|${pageChats.map((c) => c.id).join(",")}`;
       const client = beeperRef.current;
-      const previews = await Promise.all(pageChats.map(async (c) => {
-        let raw = ((c as any).preview?.text || "") as string;
-        if (!raw.trim() && client) raw = await getMediaLabel(c, client);
-        return truncatePx(stripUnsupportedChars(raw).replace(/\n/g, " ").trim(), 420);
-      }));
+      const fmtPrev = (raw: string) => truncatePx(stripUnsupportedChars(raw).replace(/\n/g, " ").trim(), 420);
+      const prevRaw = (c: any) => ((c as any).preview?.text || "") as string;
+      // NEVER block the page on a media-label fetch: use preview text or the
+      // cache; unknown labels stream in via the background upgrade below
+      const previews = pageChats.map((c) => {
+        const raw = prevRaw(c);
+        return fmtPrev(raw.trim() ? raw : mediaTypeCache.get(c.id) ?? "");
+      });
       // 2 lines per chat: line1 = name, line2 = preview (blank-pad to 5 rows)
       const nameCol: string[] = [];
       const prevCol: string[] = [];
@@ -4115,6 +4119,19 @@ export function GlassesUI({
       // names on odd lines (1,3,5..), previews on even lines (2,4,6..) — two
       // containers at the same x interleave without overlap (brightness differs)
       const empty = total === 0;
+      // media labels for chats without preview text arrive in the background
+      const pending = pageChats.filter((c) => !prevRaw(c).trim() && mediaTypeCache.get(c.id) === undefined);
+      if (pending.length && client) {
+        void Promise.all(pending.map((c) => getMediaLabel(c, client))).then(() => {
+          if (chatPageSigRef.current !== pageSig) return; // user moved on
+          const fresh = pageChats.map((c) => {
+            const raw = prevRaw(c);
+            return fmtPrev(raw.trim() ? raw : mediaTypeCache.get(c.id) ?? "");
+          });
+          const txt = fresh.map((pv) => `\n${pv}`).join("\n");
+          void bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 5, containerName: "preview", content: txt, textColor: 1 }));
+        }).catch(() => {});
+      }
       const namesText = empty
         ? "No chats"
         : nameCol.map((n) => `${n}\n`).join("\n").replace(/\n+$/, "");
@@ -4128,7 +4145,6 @@ export function GlassesUI({
       const xyPad = Math.max(0, Math.round((54 - textPx(xyRaw)) / 12));
       const xyText = " ".repeat(xyPad) + xyRaw;
 
-      const pageSig = `${filter}|${page}|${pageChats.map((c) => c.id).join(",")}`;
       const selSig = `${nav.highlightedIndex}`;
 
       // fire-and-forget: the page text is already on the glasses when this
