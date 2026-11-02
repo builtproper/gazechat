@@ -42,6 +42,7 @@ export interface BeeperChat {
   isArchived: boolean
   isMuted: boolean
   isPinned: boolean
+  draft?: { text: string; attachments?: Record<string, unknown> } | null
 }
 
 export interface BeeperUser {
@@ -474,6 +475,24 @@ export class BeeperClient {
       messages: (data.items || data.messages || []).map(normalizeMessage),
       cursor: data.oldestCursor || data.cursor,
       hasMore: !!data.hasMore,
+    }
+  }
+
+  /**
+   * Set or clear the chat draft (synced across Beeper devices).
+   * Beeper refuses to overwrite a non-empty draft → clear first, then set.
+   */
+  async updateDraft(chatID: string, text: string | null): Promise<void> {
+    const url = `${this.baseUrl}/v1/chats/${encodeURIComponent(chatID)}`
+    if (text && text.trim()) {
+      await fetch(url, { method: 'PATCH', headers: this.headers, body: JSON.stringify({ draft: null }) })
+      await fetch(url, {
+        method: 'PATCH',
+        headers: this.headers,
+        body: JSON.stringify({ draft: { text } }),
+      })
+    } else {
+      await fetch(url, { method: 'PATCH', headers: this.headers, body: JSON.stringify({ draft: null }) })
     }
   }
 

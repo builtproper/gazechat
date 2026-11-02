@@ -1173,6 +1173,40 @@ let composeWantFocus = false;
 let composeMirror: (() => void) | null = null;
 let composeSend: ((t: string) => Promise<boolean>) | null = null;
 let composeInput: HTMLInputElement | null = null;
+// draft sync (Joel 02.11.): prefill the compose box from Beeper's draft when a
+// chat opens; write it back when the chat view is left. dirty-tracked so a
+// mere peek into a chat never rewrites the draft.
+let draftChatId: string | null = null;
+let draftSaved = "";
+function draftToText(html?: string | null): string {
+  if (!html) return "";
+  return sanitizeHtmlAndEntities(html).replace(/\r/g, "").replace(/\n+/g, " ").trim();
+}
+/** Prefill compose from a chat's draft (called on chat open). */
+function gcSeedDraft(chatId: string, draftHtml?: string | null) {
+  const text = draftToText(draftHtml);
+  draftChatId = chatId;
+  draftSaved = text;
+  composeText = text;
+  composeCaret = text.length;
+  const el = ensureComposeInput();
+  el.value = text;
+  try { el.setSelectionRange(text.length, text.length); } catch { /* ignore */ }
+}
+/** Persist the current compose text as the chat draft (debounced). */
+function gcSaveDraftNow() {
+  const chatId = draftChatId;
+  if (!chatId) return;
+  const text = composeText;
+  if (text === draftSaved) return; // unchanged — never rewrite
+  draftSaved = text;
+  const client = beeperRefForDraft();
+  if (!client) return;
+  void client.updateDraft(chatId, text).catch((e) => console.warn("[draft] save failed:", String(e).slice(0, 80)));
+}
+// set once the beeper client is available (assigned in the component body)
+let _beeperForDraft: { updateDraft: (id: string, t: string | null) => Promise<void> } | null = null;
+function beeperRefForDraft() { return _beeperForDraft; }
 let composePoll: ReturnType<typeof setInterval> | null = null;
 const COMPOSE_PX = 520; // usable width of the glasses input container
 
@@ -3320,6 +3354,8 @@ export function GlassesUI({
             micDimRef.current = false;
             inputHintGone = false;
             msgSigRef.current = ""; // force the messages page to rebuild on render
+            // prefill the compose box from Beeper's synced draft (Joel 02.11.)
+            gcSeedDraft(chat.id, (chat as { draft?: { text?: string } | null }).draft?.text);
             // messageScrollOffset will be set to max (bottom) in loadMessages
 
             void loadMessages(chat.id);
@@ -3739,6 +3775,9 @@ export function GlassesUI({
           suppressReloadTimeoutRef.current = null;
         }, 2000); // Suppress for 2 seconds
 
+        // Beeper does NOT clear the draft when sending via API — do it here
+        void _beeperForDraft?.updateDraft(selectedChat, null).catch(() => {});
+        draftSaved = "";
         // sending returns to the input: drop video preview + reset focus to mic
         unloadVideo();
         videoLoopingRef.current = false;
@@ -4637,6 +4676,17 @@ export function GlassesUI({
   }, [ensureGlassesStartup, getDisplayLines, renderChatsPage, renderTextPage]);
 
   useEffect(() => {
+    _beeperForDraft = beeper as unknown as typeof _beeperForDraft;
+  }, [beeper]);
+
+  // app close / WebView reload: best-effort draft flush
+  useEffect(() => {
+    const onHide = () => gcSaveDraftNow();
+    window.addEventListener("pagehide", onHide);
+    return () => window.removeEventListener("pagehide", onHide);
+  }, []);
+
+  useEffect(() => {
     navRef.current.screen = state.currentScreen;
   }, [state.currentScreen]);
 
@@ -4646,6 +4696,7 @@ export function GlassesUI({
         unloadVideo();
         videoLoopingRef.current = false;
         videoMsgIdRef.current = null;
+        gcSaveDraftNow(); // leaving the chat → persist compose as draft
       }
       // remember the list cursor when diving into a chat; put it back when
       // returning (page derives from the index, so the page is restored too)
