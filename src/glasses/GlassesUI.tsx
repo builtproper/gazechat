@@ -778,22 +778,26 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
       // that route through, so this works without any dev relay.
       const assetUrl = buildBeeperAssetUrl(normalizeBeeperBaseUrl(baseUrl), raw);
       const token = (await getApiConfig())?.token;
-      try {
-        const res = await fetch(assetUrl, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
-        console.log("[avatar]", (chat.title || "").slice(0, 10), res.status, res.headers.get("content-type"));
-        if (res.ok) {
-          const blob = await res.blob();
-          if (blob.size > 0) {
-            const bmp = await createImageBitmap(blob);
-            ctx.save();
-            ctx.beginPath(); ctx.arc(AV / 2, AV / 2, AV / 2 - 7, 0, Math.PI * 2); ctx.clip();
-            ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 7, 7, AV - 14, AV - 14);
-            ctx.restore();
-            drew = true;
+      // two attempts: the gateway answers 503 when >4 requests are in flight,
+      // and a truncated body can fail to decode — both are transient
+      for (let attempt = 0; attempt < 2 && !drew; attempt++) {
+        try {
+          const res = await fetch(assetUrl, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+          if (res.ok) {
+            const blob = await res.blob();
+            if (blob.size > 0) {
+              const bmp = await createImageBitmap(blob);
+              ctx.save();
+              ctx.beginPath(); ctx.arc(AV / 2, AV / 2, AV / 2 - 7, 0, Math.PI * 2); ctx.clip();
+              ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 7, 7, AV - 14, AV - 14);
+              ctx.restore();
+              drew = true;
+            }
           }
+        } catch (e) {
+          console.warn("[avatar] attempt", attempt, String(e).slice(0, 80));
         }
-      } catch (e) {
-        console.warn("[avatar] fetch threw:", String(e).slice(0, 100));
+        if (!drew && attempt === 0) await new Promise((r) => setTimeout(r, 350));
       }
     }
   } catch { /* initials fallback below */ }
@@ -834,17 +838,20 @@ async function renderAvatarStrip(
   chats: any[],
   baseUrl: string | undefined,
 ): Promise<{ png1: number[]; png2: number[]; png3: number[] }> {
-  // load all cells CONCURRENTLY (sequential was ~1.5-2s per cold avatar →
-  // 8-10s on the first visit of a page; parallel ≈ one fetch round-trip)
-  const cells = await Promise.all(
-    chats.map(async (c) => {
+  // parallel but POOLED at 3: sequential cold pages took 8-10s, but full
+  // concurrency trips the gateway's 4-in-flight cap (503 → initials)
+  const cells: (HTMLImageElement | null)[] = new Array(chats.length).fill(null);
+  let nextIdx = 0;
+  const worker = async (): Promise<void> => {
+    for (;;) {
+      const i = nextIdx++;
+      if (i >= chats.length) return;
       try {
-        return await loadImage(await composeAvatarCell(c, baseUrl));
-      } catch {
-        return null;
-      }
-    }),
-  );
+        cells[i] = await loadImage(await composeAvatarCell(chats[i], baseUrl));
+      } catch { /* initials fallback stays */ }
+    }
+  };
+  await Promise.all([worker(), worker(), worker()]);
   const render = (from: number, to: number): number[] => {
     const h = (to - from) * AVH;
     const cv = document.createElement("canvas");
