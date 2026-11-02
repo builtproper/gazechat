@@ -88,6 +88,10 @@ export interface BeeperAttachment {
   filename?: string
   size?: number
   thumbnailUrl?: string
+  srcURL?: string
+  fileName?: string
+  fileSize?: number
+  isGif?: boolean
 }
 
 export interface BeeperReaction {
