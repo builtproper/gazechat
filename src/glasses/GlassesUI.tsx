@@ -386,7 +386,7 @@ const GLYPH_W: Record<string, number> = {
   "ä": 10.8, "ö": 9.8, "ü": 10.8, "ß": 9.8, "Ä": 12.8, "Ö": 11.7, "Ü": 11.7,
   "|": 5.0, "▏": 20.0, "[": 6.5, "]": 6.5, "‹": 8.0, "›": 8.0, "…": 16.0,
 };
-const glyphW = (c: string) => GLYPH_W[c] ?? (c.codePointAt(0)! > 0x2600 ? 16 : 11.7);
+const glyphW = (c: string) => GLYPH_W[c] ?? (c === " " ? 6 : c.codePointAt(0)! > 0x2600 ? 16 : 11.7);
 const textPx = (t: string): number => [...t].reduce((s, c) => s + glyphW(c), 0);
 
 // Truncate to a pixel budget (adds '…' when cut).
@@ -962,7 +962,7 @@ function reactionText(m: BeeperMessage): string {
     ?? (typeof last.emoji === "string" ? last.emoji : "");
   return key ? " " + key : "";
 }
-const MSG_TIME_W = 116;
+const MSG_TIME_W = 124;
 // bubble width shared by wrap calc and layout (full width minus time column)
 const MSG_BUB_W = 574 - MSG_TIME_W - 4;
 function msgGeom(_isMine: boolean) {
