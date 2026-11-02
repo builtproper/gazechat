@@ -3065,6 +3065,15 @@ export function GlassesUI({
           state.selectedAccount ? { accountIDs: [state.selectedAccount] } : undefined,
         );
         if (seq !== chatCrawlSeq || !res.chats.length) return;
+        if (stateRef.current.chats.length === 0) {
+          // FIRST load (empty list): apply directly — stashing here left the
+          // list on "No chats" forever (02.11. sim-verified bug)
+          chatCursorRef.current = res.cursor ?? null;
+          chatHasMoreRef.current = !!res.hasMore;
+          chatPageSigRef.current = "";
+          setState((st) => ({ ...st, chats: res.chats, isLoading: false, setupRequired: false }));
+          return;
+        }
         pendingChatsRef.current = { chats: res.chats, cursor: res.cursor ?? null, hasMore: !!res.hasMore };
       } catch (e) {
         console.warn("[GlassesUI] Chat polling failed:", e);
@@ -4373,8 +4382,8 @@ export function GlassesUI({
       // overflows — overflow made the firmware scroll-jump on every upgrade
       const markerText = empty ? " " : markCol.map((m) => `${m}\n `).join("\n").replace(/\n $/, "");
       const labelText = filterLabel(filter);
-      const more = chatHasMoreRef.current && page === totalPages - 1;
-      const xyRaw = `${page + 1}/${totalPages}${more ? "+" : ""}`;
+      // "X/Y+" on EVERY page while more chats can be fetched (Joel spec)
+      const xyRaw = `${page + 1}/${totalPages}${chatHasMoreRef.current ? "+" : ""}`;
       // center with leading spaces: (54px column - text) / 2 / 6px per space
       const xyPad = Math.max(0, Math.round((54 - textPx(xyRaw)) / 12));
       const xyText = " ".repeat(xyPad) + xyRaw;
