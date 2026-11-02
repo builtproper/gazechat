@@ -3942,7 +3942,6 @@ export function GlassesUI({
             ? [head, rx].filter(Boolean)
             : [tag, tstr + rx];
         if (it.blocks > 1) timeLines.push(`${it.block + 1}/${it.blocks}`);
-        const focused = focus === slotIdx[i];
         const tlines = timeLines.filter(Boolean);
         // NO focus toggle here: a trailing space could push a just-fitting
         // date line over the wrap limit. Time brightness is constant (the
