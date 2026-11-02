@@ -3631,15 +3631,32 @@ export function GlassesUI({
       }
 
       const result = await beeper.listMessages(chatId);
-      msgCursorRef.current = result.cursor ?? null;
-      msgHasMoreRef.current = !!result.hasMore;
       // REACTION messages are not bubbles: Beeper marks them isHidden and
       // attaches the reaction to the ORIGINAL message (reactions[]). Show
       // them as a marker after the time instead of a "[media]" bubble.
-      const messages = result.messages
+      const fresh = result.messages
         .filter((m) => (m.type || "").toUpperCase() !== "REACTION" && !(m as { isHidden?: boolean }).isHidden)
         .reverse();
-      const finalMessages = messages;
+      // keep older messages the user already paged in above this window
+      const toN = (k?: string) => Number(k ?? 0);
+      const oldestNew = fresh.length ? toN(fresh[0].sortKey) : 0;
+      const freshIds = new Set(fresh.map((m) => m.id));
+      const keptOlder = stateRef.current.messages.filter(
+        (m) => !freshIds.has(m.id) && toN(m.sortKey) < oldestNew,
+      );
+      const finalMessages = [...keptOlder, ...fresh];
+      // only move the older-history cursor on a fresh window (a poll must not
+      // rewind it, or loadOlder would re-fetch the same page forever)
+      if (!keptOlder.length) {
+        msgCursorRef.current = result.cursor ?? null;
+        msgHasMoreRef.current = !!result.hasMore;
+      }
+      // keep the focused message under the cursor across the merge (by ID)
+      const focusId = msgFocusRef.current >= 0 ? stateRef.current.messages[msgFocusRef.current]?.id : null;
+      if (focusId) {
+        const idx = finalMessages.findIndex((m) => m.id === focusId);
+        if (idx >= 0) msgFocusRef.current = idx;
+      }
       const initialScroll = Math.max(0, finalMessages.length - 1);
 
       setState((s) => {
@@ -4439,7 +4456,7 @@ export function GlassesUI({
       // "X/Y+" on EVERY page while more chats can be fetched (Joel spec)
       const xyRaw = `${page + 1}/${totalPages}${chatHasMoreRef.current ? "+" : ""}`;
       // center with leading spaces: (54px column - text) / 2 / 6px per space
-      const xyPad = Math.max(0, Math.round((54 - textPx(xyRaw)) / 12));
+      const xyPad = Math.max(0, Math.round((61 - textPx(xyRaw)) / 12));
       const xyText = " ".repeat(xyPad) + xyRaw;
 
       const selSig = `${nav.highlightedIndex}`;
@@ -4481,7 +4498,7 @@ export function GlassesUI({
             }),
             textObject: [
               new TextContainerProperty({ containerID: 1, containerName: "clock", xPosition: 2, yPosition: 2, width: 52, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: clockText(), zOrderIndex: 1 }),
-              new TextContainerProperty({ containerID: 2, containerName: "xy", xPosition: 2, yPosition: 250, width: 54, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 2 }),
+              new TextContainerProperty({ containerID: 2, containerName: "xy", xPosition: 2, yPosition: 250, width: 61, height: 34, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: xyText, textColor: 2, zOrderIndex: 2 }),
               new TextContainerProperty({ containerID: 3, containerName: "markers", xPosition: 56, yPosition: 14, width: 20, height: 274, paddingLength: 0, borderWidth: 0, borderRadius: 0, content: markerText, zOrderIndex: 3 }),
               // empty scroll catcher directly BEHIND the spine logo (lowest z):
               // gestures land here, its single-space content can never scroll
