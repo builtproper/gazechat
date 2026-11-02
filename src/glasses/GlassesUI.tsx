@@ -702,11 +702,13 @@ async function getMediaLabel(chat: any, client: any): Promise<string> {
     const res = await client.listMessages(chat.id, { limit: 1 });
     const m = res?.messages?.[0];
     const t = (m?.type || "").toUpperCase();
-    if (t === "IMAGE") label = "📷 Photo";
-    else if (t === "VIDEO") label = "🎬 Video";
-    else if (t === "AUDIO") label = "🎵 Audio";
-    else if (t === "VOICE") label = "🎤 Voice Message";
-    else if (t === "FILE") label = "📎 Attachment";
+    // no space after the emoji: the firmware skips glyphs it lacks (📷🎬🎵🎤)
+    // and the leftover space then showed as a leading blank in the preview
+    if (t === "IMAGE") label = "📷Photo";
+    else if (t === "VIDEO") label = "🎬Video";
+    else if (t === "AUDIO") label = "🎵Audio";
+    else if (t === "VOICE") label = "🎤Voice Message";
+    else if (t === "FILE") label = "📎Attachment";
     else if (t === "STICKER") label = "Sticker";
     else if (t === "LOCATION") label = "Location";
     else if (t === "REACTION") {
