@@ -689,6 +689,17 @@ async function getMediaLabel(chat: any, client: any): Promise<string> {
     else if (t === "FILE") label = "📎 Attachment";
     else if (t === "STICKER") label = "Sticker";
     else if (t === "LOCATION") label = "Location";
+    else if (t === "REACTION") {
+      // "Reacted 👍 to: <original>" — the emoji lives on the LINKED message
+      // (reactions[]); the reaction message itself only carries the link.
+      // listMessages returns the newest page first, so the original is in it.
+      const linked = (res?.messages || []).find((x: any) => x.id === m.linkedMessageID);
+      const rs = Array.isArray((linked as any)?.reactions) ? (linked as any).reactions : [];
+      const last = rs[rs.length - 1] as { reactionKey?: string; emoji?: unknown } | undefined;
+      const key = last?.reactionKey ?? (typeof last?.emoji === "string" ? last.emoji : "");
+      const orig = String((linked as any)?.text || "").replace(/\n/g, " ").trim();
+      label = "Reacted" + (key ? ` ${key}` : "") + (orig ? ` to: ${orig.slice(0, 15)}...` : "");
+    }
     else if (t) label = "Attachment";
   } catch {}
   mediaTypeCache.set(chat.id, label);
