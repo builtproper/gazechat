@@ -51,8 +51,50 @@ function ensureEls(): { v: HTMLVideoElement; c: HTMLCanvasElement } | null {
  *  (~165k iterations/frame) was redundant CPU that capped the phone at ~0.7 fps.
  *  ctx.filter does the greyscale natively; if a WebView lacks it the color PNG
  *  still renders (host discards chroma). */
+// ── true-grayscale PNG writer (color type 0, 8-bit) ──
+// toDataURL emits RGB PNGs (3 bytes/px pre-deflate); gray cuts that to 1.
+// Measured: send time tracks PNG size, so a smaller PNG is the lever.
+const CRC_T = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c >>> 0;
+  }
+  return t;
+})();
+function crc32(buf: number[]): number {
+  let c = 0xffffffff;
+  for (let i = 0; i < buf.length; i++) c = CRC_T[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ 0xffffffff) >>> 0;
+}
+const be32 = (n: number) => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+function pngChunk(type: string, data: number[]): number[] {
+  const body = [...Array.from(type, (ch) => ch.charCodeAt(0)), ...data];
+  return [...be32(data.length), ...body, ...be32(crc32(body))];
+}
+/** zlib stream via CompressionStream (iOS 16.4+); null if unavailable. */
+async function zlibDeflate(raw: Uint8Array): Promise<number[] | null> {
+  const CS = (window as any).CompressionStream;
+  if (!CS) return null;
+  try {
+    const stream = new Blob([raw.slice().buffer as ArrayBuffer]).stream().pipeThrough(new CS("deflate"));
+    const buf = new Uint8Array(await new Response(stream).arrayBuffer());
+    return Array.from(buf);
+  } catch { return null; }
+}
+function assembleGrayPng(w: number, h: number, idat: number[]): number[] {
+  const ihdr = [...be32(w), ...be32(h), 8, 0, 0, 0, 0]; // 8-bit gray
+  return [
+    137, 80, 78, 71, 13, 10, 26, 10,
+    ...pngChunk("IHDR", ihdr),
+    ...pngChunk("IDAT", idat),
+    ...pngChunk("IEND", []),
+  ];
+}
+
 /** PNG-encoded frame (poster AND loop — the only format the host renders). */
-function grabFramePng(c: HTMLCanvasElement): number[] | null {
+async function grabFramePng(c: HTMLCanvasElement): Promise<number[] | null> {
   const v = video!;
   if (!v.videoWidth || !v.videoHeight) return null;
   const ctx = c.getContext("2d")!;
@@ -61,19 +103,23 @@ function grabFramePng(c: HTMLCanvasElement): number[] | null {
   ctx.fillRect(0, 0, VID_W, VID_H);
   const scale = Math.max(VID_W / v.videoWidth, VID_H / v.videoHeight);
   const w = v.videoWidth * scale, h = v.videoHeight * scale;
-  ctx.filter = "grayscale(1)";
   ctx.drawImage(v, (VID_W - w) / 2, (VID_H - h) / 2, w, h);
-  ctx.filter = "none";
-  // quantize to the display's 16 gray levels BEFORE encoding: the G2 is 4-bit
-  // anyway (host does imageToGray4), and a 16-level PNG deflates ~2x smaller
-  // than an 8-bit one → half the number[] entries across the bridge → the
-  // measured send cost (690-1630ms, dominated by array size) roughly halves.
+  // quantize to the display's 16 gray levels (host is 4-bit anyway)
   const img = ctx.getImageData(0, 0, VID_W, VID_H);
   const d = img.data;
-  for (let i = 0; i < d.length; i += 4) {
-    const g = (((d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8) >> 4) * 17; // → 0..255 in 16 steps
-    d[i] = d[i + 1] = d[i + 2] = g;
+  const gray = new Uint8Array(VID_W * VID_H);
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) {
+    gray[p] = (((d[i] * 77 + d[i + 1] * 150 + d[i + 2] * 29) >> 8) >> 4) * 17;
   }
+  const raw = new Uint8Array(VID_H * (VID_W + 1));
+  for (let y = 0; y < VID_H; y++) {
+    raw[y * (VID_W + 1)] = 0;
+    raw.set(gray.subarray(y * VID_W, (y + 1) * VID_W), y * (VID_W + 1) + 1);
+  }
+  const idat = await zlibDeflate(raw);
+  if (idat) return assembleGrayPng(VID_W, VID_H, idat);
+  // no CompressionStream (old iOS): RGB toDataURL fallback
+  for (let i = 0, p = 0; i < d.length; i += 4, p++) { d[i] = d[i + 1] = d[i + 2] = gray[p]; }
   ctx.putImageData(img, 0, 0);
   const url = c.toDataURL("image/png");
   return Array.from(atob(url.split(",")[1] || ""), (ch) => ch.charCodeAt(0));
@@ -85,7 +131,7 @@ async function pump() {
   inFlight = true;
   try {
     const t0 = performance.now();
-    const bytes = grabFramePng(canvas);
+    const bytes = await grabFramePng(canvas);
     const t1 = performance.now();
     if (bytes) await sendFrame(bytes);
     const t2 = performance.now();
@@ -126,7 +172,7 @@ export async function posterFrame(): Promise<number[] | null> {
   if (v.readyState < 2) await new Promise((r) => { v.addEventListener("loadeddata", r, { once: true }); });
   try { v.currentTime = Math.min(0.5, (v.duration || 1) / 3); } catch { /* some sources refuse */ }
   await new Promise((r) => { v.addEventListener("seeked", r, { once: true }); setTimeout(r, 600); });
-  return grabFramePng(els.c);
+  return await grabFramePng(els.c);
 }
 
 /** Start the ~5 fps loop. The sender must await the actual BLE write. */
