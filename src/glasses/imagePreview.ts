@@ -1,14 +1,15 @@
 /**
  * Full-size image preview for the GazeChat chat view.
  *
- * Image containers are capped at 288x144 px, so a focused photo fills the
- * message area (y84..244) with 1-2 containers depending on aspect ratio:
- *   aspect >= 2    → wide:   two side by side (574x144 box)
- *   aspect <= 1.44 → tall:   two stacked (288x200 box, full area)
- *   otherwise      → single: one container (288x144)
- * The bitmap is contain-fit onto the box, quantized to the panel's 16 gray
- * levels (lossless for what the display can show) and sliced to the exact
- * container rectangles.
+ * Design language = the video preview: a focused photo sits INSIDE the normal
+ * full-page bordered message bubble, time container beside it as always.
+ * Image containers are capped at 288x144 px, so large photos use 1-2
+ * containers within the bubble rect (bx..bx+bw, y44..244):
+ *   aspect >= 2    → wide:   two side by side, full bubble width x 144
+ *   aspect <= 1.44 → tall:   two stacked, 288 x 200 (full bubble height)
+ *   otherwise      → single: one 288x144 centered in the bubble
+ * The bitmap is contain-fit (never stretched), quantized to the panel's 16
+ * gray levels and sliced to the exact container rectangles.
  */
 
 export type ImgMode = "wide" | "tall" | "single";
@@ -16,25 +17,39 @@ export type ImgMode = "wide" | "tall" | "single";
 export interface ImgLayout {
   mode: ImgMode;
   boxes: { x: number; y: number; w: number; h: number }[];
+  /** full composition canvas the slices are cut from */
+  canvas: { w: number; h: number };
 }
 
-/** Fixed container geometry per mode (create-time positions). */
-export function imgLayout(aspect: number): ImgLayout {
+const AREA_Y = 44;
+const AREA_H = 200;
+
+const INSET = 4; // keep the bubble border visible around the photo
+/** @param bx bubble left edge, @param bw bubble inner width */
+export function imgLayout(aspect: number, bx: number, bw: number): ImgLayout {
+  const ix = bx + INSET, iw = bw - INSET * 2;
+  const iy = AREA_Y + INSET, ih = AREA_H - INSET * 2;
   if (aspect >= 2) {
-    return { mode: "wide", boxes: [
-      { x: 0, y: 96, w: 287, h: 144 },
-      { x: 287, y: 96, w: 287, h: 144 },
+    const h = Math.min(144, ih);
+    const y = iy + Math.round((ih - h) / 2);
+    const half = Math.floor(iw / 2);
+    return { mode: "wide", canvas: { w: iw, h }, boxes: [
+      { x: ix, y, w: half, h },
+      { x: ix + half, y, w: iw - half, h },
     ] };
   }
   if (aspect <= 1.44) {
-    // full message-area height (y44..244): portrait photos fill much better
-    return { mode: "tall", boxes: [
-      { x: 143, y: 44, w: 288, h: 100 },
-      { x: 143, y: 144, w: 288, h: 100 },
+    const w = Math.min(288, iw);
+    const x = ix + Math.round((iw - w) / 2);
+    const half = Math.floor(ih / 2);
+    return { mode: "tall", canvas: { w, h: ih }, boxes: [
+      { x, y: iy, w, h: half },
+      { x, y: iy + half, w, h: ih - half },
     ] };
   }
-  return { mode: "single", boxes: [
-    { x: 143, y: 92, w: 288, h: 144 },
+  const w = Math.min(288, iw), h = Math.min(144, ih);
+  return { mode: "single", canvas: { w, h }, boxes: [
+    { x: ix + Math.round((iw - w) / 2), y: iy + Math.round((ih - h) / 2), w, h },
   ] };
 }
 
@@ -45,16 +60,12 @@ function pngDataUrlToBytes(dataUrl: string): number[] {
   return out;
 }
 
-/**
- * Slice a decoded bitmap into per-container PNGs matching imgLayout().
- * Returns one PNG (byte array) per box.
- */
+/** Slice a decoded bitmap into per-container PNGs matching imgLayout(). */
 export async function renderImageSlices(
   bmp: ImageBitmap,
   layout: ImgLayout,
 ): Promise<number[][]> {
-  const boxW = layout.mode === "wide" ? 574 : layout.mode === "tall" ? 288 : 288;
-  const boxH = layout.mode === "wide" ? 144 : layout.mode === "tall" ? 200 : 144;
+  const boxW = layout.canvas.w, boxH = layout.canvas.h;
   const scale = Math.min(boxW / bmp.width, boxH / bmp.height);
   const w = Math.max(1, Math.round(bmp.width * scale));
   const h = Math.max(1, Math.round(bmp.height * scale));
@@ -73,7 +84,6 @@ export async function renderImageSlices(
   }
   ctx.putImageData(img, 0, 0);
 
-  // box origin on the full canvas (wide starts at x0/y92, tall at x143/y84…)
   const ox = layout.boxes[0].x;
   const oy = layout.boxes[0].y;
   const out: number[][] = [];

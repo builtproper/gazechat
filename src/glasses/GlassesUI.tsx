@@ -962,7 +962,7 @@ function reactionText(m: BeeperMessage): string {
     ?? (typeof last.emoji === "string" ? last.emoji : "");
   return key ? " " + key : "";
 }
-const MSG_TIME_W = 106;
+const MSG_TIME_W = 116;
 // bubble width shared by wrap calc and layout (full width minus time column)
 const MSG_BUB_W = 574 - MSG_TIME_W - 4;
 function msgGeom(_isMine: boolean) {
@@ -4336,11 +4336,6 @@ export function GlassesUI({
       const items = layout.items;
       const videoFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "VIDEO";
       const imgFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "IMAGE";
-      const imgAspect = imgFocus ? attachmentAspect(items[0].msg) : 1;
-      const imgLayout = imgFocus ? imgLayoutFor(imgAspect) : null;
-      // photo fills the row where the time would sit → time moves to the top
-      // strip (full width: date+time never wraps) and the bubble is hidden
-      const imgTimeTop = imgFocus && (imgLayout?.mode === "single" || imgLayout?.mode === "tall");
       // focused message = full brightness; others one step dimmer; mic dims
       // when a message holds the focus
       const slotIdx = items.map((it) => snapshot.messages.indexOf(it.msg));
@@ -4354,8 +4349,7 @@ export function GlassesUI({
         if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y, h: 40, th: 40, timeY: MSG_AREA_Y, bx: 0, tx: 0, isMine: false, bright: 3, show: false };
         const isMine = !!it.msg.isSender;
         const isVid = layout.focus && (it.msg.type || "").toUpperCase() === "VIDEO";
-        const isImgTop = imgTimeTop && i === 0;
-        const tag = msgDateTag(it.msg.timestamp);
+          const tag = msgDateTag(it.msg.timestamp);
         const rx = reactionText(it.msg);
         const tstr = formatTime(it.msg.timestamp);
         const head = tag ? `${tag} ${tstr}` : tstr;
@@ -4371,7 +4365,7 @@ export function GlassesUI({
             : [tag, tstr + rx];
         if (it.blocks > 1) timeLines.push(`${it.block + 1}/${it.blocks}`);
         const tlines = timeLines.filter(Boolean);
-        const timeTxt = isImgTop ? " " : tlines.join("\n") + pad;
+        const timeTxt = tlines.join("\n") + pad;
         // natural height per message (pages are packed by height); focus mode
         // gives the single message the whole area
         const bh = layout.focus ? MSG_AREA_H : it.lines.length * MSG_LINE_H + MSG_RESERVE;
@@ -4390,20 +4384,15 @@ export function GlassesUI({
       });
       // stack slots top-down at their natural heights; center time beside bubble
       let y = MSG_AREA_Y;
-      if (imgFocus && imgLayout?.mode === "wide") {
-        // full-width photo: time rides the top strip instead of beside it
-        const s0 = slots[0];
-        if (s0.show) { s0.y = MSG_AREA_Y; s0.timeY = MSG_AREA_Y; }
-      }
       for (const s of slots) {
         if (!s.show) continue;
-        if (imgFocus && imgLayout?.mode === "wide") { y = s.y + s.h + MSG_GAP; continue; }
         s.y = y;
         s.timeY = y + Math.max(0, Math.round((s.h - s.th) / 2));
         y += s.h + MSG_GAP;
       }
       // shape = focus mode + per-slot geometry (page change → rebuild, which is
       // correct: new messages = new content); stable within a page → upgrades
+      const imgLayout = imgFocus ? imgLayoutFor(attachmentAspect(items[0].msg), slots[0].bx, BUB_W) : null;
       const shape = (layout.focus ? "F" : "N") + (videoFocus ? "V" : imgFocus ? "I" + (imgLayout?.mode ?? "") : "") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}:${s.y}` : "x")).join("");
       msgTopNameRef.current = chatName;
       // phone typing mirrors live into the glasses input container
@@ -4418,8 +4407,7 @@ export function GlassesUI({
       // pad so the name starts clear of the avatar image (x 70..104)
       const lead = `${clockText()} |`;
       const padPx = Math.max(0, 106 - textPx(lead));
-      const imgTimeStr = imgTimeTop && items[0] ? `${msgDateTag(items[0].msg.timestamp) ? msgDateTag(items[0].msg.timestamp) + " " : ""}${formatTime(items[0].msg.timestamp)}` : "";
-      const topbarText = `${lead}${" ".repeat(Math.ceil(padPx / 6))}${chatName}` + (imgTimeTop ? `   ${imgTimeStr}` : "");
+      const topbarText = `${lead}${" ".repeat(Math.ceil(padPx / 6))}${chatName}`;
       const contentSig = `${slots.map((s) => s.bubble).join("|")}#${slots.map((s) => s.time).join("|")}#${topbarText}`;
       if (glassesLayoutRef.current === "messages" && msgSigRef.current === shape + "#" + contentSig) return;
       const needRebuild = glassesLayoutRef.current !== "messages" || msgSigRef.current.split("#")[0] !== shape;
@@ -4430,16 +4418,9 @@ export function GlassesUI({
 
       const textObject = [
         new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 1, yPosition: 2, width: 574, height: 38, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 0, zOrderIndex: 1 }),
-        mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, imgFocus ? " " : slots[0].bubble, slots[0].show && !imgFocus ? 1 : 0, slots[0].bright),
+        mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, imgFocus ? " " : slots[0].bubble, slots[0].show ? 1 : 0, slots[0].bright),
         mk(3, "time0", slots[0].tx, TIME_W, slots[0].timeY, slots[0].th, slots[0].time, 0, slots[0].bright === 4 ? 2 : 1),
-        mk(4, "bub1", ...(imgLayout ? (() => {
-          const bs = imgLayout.boxes;
-          const x0 = Math.min(...bs.map((b) => b.x)), y0 = Math.min(...bs.map((b) => b.y));
-          const x1 = Math.max(...bs.map((b) => b.x + b.w)), y1 = Math.max(...bs.map((b) => b.y + b.h));
-          const fx = Math.max(0, x0 - 2), fy = Math.max(0, y0 - 2);
-          const fw = Math.min(576 - fx, x1 - x0 + 4), fh = Math.min(288 - fy, y1 - y0 + 4);
-          return [fx, fw, fy, fh, " ", 1, 1] as const;
-        })() : ([slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0, slots[1].bright] as const))),
+        mk(4, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0, slots[1].bright),
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, slots[1].bright === 4 ? 2 : 1),
         mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0, slots[2].bright),
         mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, slots[2].th, slots[2].time, 0, slots[2].bright === 4 ? 2 : 1),
@@ -4490,7 +4471,7 @@ export function GlassesUI({
         [1, "topbar", textObject[0].content ?? "", undefined],
         [2, "bub0", textObject[1].content ?? "", slots[0].bright],
         [3, "time0", textObject[2].content ?? "", slots[0].bright === 4 ? 2 : 1],
-        [4, "bub1", textObject[3].content ?? "", imgLayout ? 1 : slots[1].bright],
+        [4, "bub1", textObject[3].content ?? "", slots[1].bright],
         [5, "time1", textObject[4].content ?? "", slots[1].bright === 4 ? 2 : 1],
         [6, "bub2", textObject[5].content ?? "", slots[2].bright],
         [7, "time2", textObject[6].content ?? "", slots[2].bright === 4 ? 2 : 1],
