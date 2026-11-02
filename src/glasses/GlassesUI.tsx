@@ -1077,6 +1077,11 @@ function getMicIcon(dim = false): number[] {
 // container. Ctrl/Alt+arrows move the caret, Ctrl+Backspace/Delete delete
 // words, Enter sends, Escape clears.
 let composeText = "";
+// the input container is the scroll catcher; its placeholder would visibly
+// rubber-band on gestures → dropped after the first scroll (Joel 02.11.)
+let inputHintGone = false;
+const INPUT_HINT = "Type on your phone or tap to record or transcribe";
+const inputHint = () => (inputHintGone ? " " : INPUT_HINT);
 let composeCaret = 0;
 let composeArmed = false;
 let composeWantFocus = false;
@@ -3188,6 +3193,7 @@ export function GlassesUI({
             msgBlockRef.current = 0;
             msgFocusRef.current = -1; // focus starts on the mic
             micDimRef.current = false;
+            inputHintGone = false;
             msgSigRef.current = ""; // force the messages page to rebuild on render
             // messageScrollOffset will be set to max (bottom) in loadMessages
 
@@ -3639,6 +3645,12 @@ export function GlassesUI({
           if (snapshot.currentScreen === "messages") {
             const messages = snapshot.messages;
             if (messages.length === 0) return nav;
+            if (!inputHintGone) {
+              inputHintGone = true;
+              void glassesBridgeRef.current?.textContainerUpgrade(
+                new TextContainerUpgrade({ containerID: 11, containerName: "input", content: " ", textColor: 0 }),
+              );
+            }
             const focus = Math.min(msgFocusRef.current, messages.length - 1);
             const down = action.direction === "down";
             const pages = buildMsgPages(messages);
@@ -3984,7 +3996,7 @@ export function GlassesUI({
       composeMirror = () => {
         const b = glassesBridgeRef.current;
         if (!b) return;
-        const txt = composeText ? composeWindow() : "Type on your phone or tap to record or transcribe";
+        const txt = composeText ? composeWindow() : inputHint();
         if (txt === lastMirrorTxt) return;
         lastMirrorTxt = txt;
         void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt, textColor: composeText ? 4 : 0 }));
@@ -4002,14 +4014,14 @@ export function GlassesUI({
         new TextContainerProperty({ containerID: id, containerName: name, xPosition: x, yPosition: sy, width: w, height: sh, paddingLength: 2, borderWidth: border, borderColor: border ? 3 : 0, borderRadius: border ? 6 : 0, content, textColor: bright, isEventCapture: capture ? 1 : 0, zOrderIndex: id });
 
       const textObject = [
-        new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 1, yPosition: 2, width: 574, height: 38, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 1, zOrderIndex: 1 }),
+        new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 1, yPosition: 2, width: 574, height: 38, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 0, zOrderIndex: 1 }),
         mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0, slots[0].bright),
         mk(3, "time0", slots[0].tx, TIME_W, slots[0].timeY, slots[0].th, slots[0].time, 0, slots[0].bright === 4 ? 2 : 1),
         mk(4, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0, slots[1].bright),
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, slots[1].bright === 4 ? 2 : 1),
         mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0, slots[2].bright),
         mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, slots[2].th, slots[2].time, 0, slots[2].bright === 4 ? 2 : 1),
-        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? composeWindow() : "Type on your phone or tap to record or transcribe", textColor: composeText ? 4 : 0, zOrderIndex: 11 }),
+        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? composeWindow() : inputHint(), textColor: composeText ? 4 : 0, isEventCapture: 1, zOrderIndex: 11 }),
       ];
 
       if (needRebuild) {
