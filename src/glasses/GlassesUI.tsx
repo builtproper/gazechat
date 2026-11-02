@@ -51,6 +51,11 @@ import {
   loadVideo, posterFrame, startLoop, stopLoop, unloadVideo,
   setPreviewAudio, videoCurrentTime, VID_W, VID_H,
 } from "./videoPreview";
+import {
+  loadVoice, toggleVoice, unloadVoice, stopVoice,
+  voiceDur, voicePos, voicePlaying, voiceMsgId,
+  setVoiceSpeed,
+} from "./voicePreview";
 import { imgLayout as imgLayoutFor, renderImageSlices } from "./imagePreview";
 
 // ═══════════════════════════════════════════════════════════════
@@ -210,6 +215,21 @@ async function persistAudioPref(on: boolean): Promise<void> {
     if (bridge) { await bridge.setLocalStorage(AUDIO_PREF_KEY, on ? "1" : "0"); return; }
   } catch { /* fall through */ }
   try { localStorage.setItem(AUDIO_PREF_KEY, on ? "1" : "0"); } catch { /* ignore */ }
+}
+const SPEED_PREF_KEY = "gc_vspeed";
+async function persistSpeedPref(v: number): Promise<void> {
+  try {
+    const bridge = await getBridge();
+    if (bridge) { await bridge.setLocalStorage(SPEED_PREF_KEY, String(v)); return; }
+  } catch { /* fall through */ }
+  try { localStorage.setItem(SPEED_PREF_KEY, String(v)); } catch { /* ignore */ }
+}
+async function loadSpeedPref(): Promise<number> {
+  try {
+    const bridge = await getBridge();
+    if (bridge) { const v = Number(await bridge.getLocalStorage(SPEED_PREF_KEY)); return [0.5, 1, 1.5, 2].includes(v) ? v : 1; }
+  } catch { /* fall through */ }
+  try { const v = Number(localStorage.getItem(SPEED_PREF_KEY)); return [0.5, 1, 1.5, 2].includes(v) ? v : 1; } catch { return 1; }
 }
 async function loadAudioPref(): Promise<boolean> {
   try {
@@ -928,6 +948,7 @@ export const MENU_CHATS = 1;
 export const MENU_LOW_PRIORITY = 2;
 export const MENU_ARCHIVED = 3;
 export const MENU_AUDIO = 4;
+export const MENU_SPEED = 5;
 
 function filterChats(chats: any[], filter: "normal" | "low" | "archived"): any[] {
   if (filter === "low") return chats.filter((c) => c.isLowPriority && !c.isArchived);
@@ -1003,10 +1024,16 @@ function wrapToPx(text: string, maxPx: number): string[] {
 let msgIsGroup = false;
 function msgBubbleText(msg: BeeperMessage, all: BeeperMessage[]): string {
   let t = stripUnsupportedChars(formatMessageText(msg)).replace(/\r/g, "").trim();
-  if (!t || t === "[media]") {
-    const ty = (msg.type || "").toUpperCase();
+  const ty0 = (msg.type || "").toUpperCase();
+  if (ty0 === "VOICE") {
+    // voice notes render as a one-line transport bar (video design); the
+    // position/duration come from the voice engine when THIS message is the
+    // loaded one, else a static 0:00 bar
+    const active = voiceMsgId() === msg.id;
+    t = videoTransportLine(active ? voicePos() : 0, active ? voiceDur() : 0, active && voicePlaying());
+  } else if (!t || t === "[media]") {
     const fname = (msg.attachments as any[])?.[0]?.filename || (msg.attachments as any[])?.[0]?.fileName;
-    t = ty === "IMAGE" ? "[Photo]" : ty === "VIDEO" ? "[Video]" : ty === "AUDIO" ? "[Audio]" : ty === "VOICE" ? "[Voice]" : ty === "FILE" ? (fname ? `[File: ${fname}]` : "[File]") : "[media]";
+    t = ty0 === "IMAGE" ? "[Photo]" : ty0 === "VIDEO" ? "[Video]" : ty0 === "AUDIO" ? "[Audio]" : ty0 === "VOICE" ? "[Voice]" : ty0 === "FILE" ? (fname ? `[File: ${fname}]` : "[File]") : "[media]";
   }
   if (msg.linkedMessageID) {
     const linked = all.find((m) => m.id === msg.linkedMessageID);
@@ -1037,6 +1064,13 @@ function attachmentAspect(m: BeeperMessage): number {
 }
 function imageAssetUrl(m: BeeperMessage, baseUrl: string | undefined): string | null {
   const att = (m.attachments as any[])?.[0];
+  const raw: string | undefined = att?.srcURL || att?.url;
+  if (!raw || !baseUrl) return null;
+  try { return buildBeeperAssetUrl(normalizeBeeperBaseUrl(baseUrl), raw); } catch { return null; }
+}
+function voiceAssetUrl(m: BeeperMessage, baseUrl: string | undefined): string | null {
+  const att = (m.attachments || []).find((a: any) =>
+    (a.type || "").toLowerCase() === "audio" || (a.mimeType || "").startsWith("audio"));
   const raw: string | undefined = att?.srcURL || att?.url;
   if (!raw || !baseUrl) return null;
   try { return buildBeeperAssetUrl(normalizeBeeperBaseUrl(baseUrl), raw); } catch { return null; }
@@ -1080,6 +1114,9 @@ function msgLineCount(m: BeeperMessage, all: BeeperMessage[]): number {
   return wrapToPx(msgBubbleText(m, all), msgGeom(m.isSender).bubbleW - 14).length;
 }
 // a message owns a block-paginated page when it's media or taller than the area
+function isVoiceMsg(m: BeeperMessage): boolean {
+  return (m.type || "").toUpperCase() === "VOICE";
+}
 function ownsPage(m: BeeperMessage, all: BeeperMessage[]): boolean {
   return isMediaMsg(m) || msgNatH(m, all) > MSG_AREA_H;
 }
@@ -2209,6 +2246,7 @@ export function GlassesUI({
   const videoDurRef = useRef<number>(0);
   const videoPosRef = useRef<number>(0);
   const audioOnRef = useRef<boolean>(false);
+  const speedRef = useRef<number>(1);
   const videoLoopingRef = useRef<boolean>(false);
   const msgTopNameRef = useRef<string>("");
   const msgLastContentRef = useRef<Record<number, string>>({});
@@ -3805,6 +3843,7 @@ export function GlassesUI({
         draftSaved = "";
         // sending returns to the input: drop video preview + reset focus to mic
         unloadVideo();
+        unloadVoice();
         videoLoopingRef.current = false;
         videoMsgIdRef.current = null;
         msgFocusRef.current = -1;
@@ -3935,7 +3974,7 @@ export function GlassesUI({
               : focus;
             const p = eff < 0 ? pages[0] : msgPageFor(pages, eff);
             const blocksOf = (m: BeeperMessage) =>
-              (m.type || "").toUpperCase() === "IMAGE" || (m.type || "").toUpperCase() === "VIDEO"
+              isMediaMsg(m) || isVoiceMsg(m)
                 ? 1
                 : Math.max(1, Math.ceil(wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14).length / MSG_MAX_LINES));
             let newFocus = eff;
@@ -4038,6 +4077,11 @@ export function GlassesUI({
             const msgs = snapshot.messages;
             const fi = Math.min(msgFocusRef.current, msgs.length - 1);
             const fm = fi >= 0 ? msgs[fi] : null;
+            if (fm && isVoiceMsg(fm)) {
+              void setupVoicePreview(fm); // no-op if already loaded
+              toggleVoice();
+              setState((st) => ({ ...st }));
+            }
             if (fm && (fm.type || "").toUpperCase() === "VIDEO" && videoMsgIdRef.current === fm.id) {
               if (videoLoopingRef.current) {
                 stopLoop();
@@ -4261,6 +4305,20 @@ export function GlassesUI({
     [],
   );
 
+  // voice bar ticker: 2 fps while a note plays (enough for 2.0x speed),
+  // idle otherwise — the transport line rides the normal upgrade path
+  useEffect(() => {
+    let wasPlaying = false;
+    const id = window.setInterval(() => {
+      const now = voicePlaying();
+      if (!now && !wasPlaying) return; // idle — no redraws
+      wasPlaying = now;
+      if (stateRef.current.currentScreen !== "messages") return;
+      setState((st) => ({ ...st })); // re-render → bar shows new position
+    }, 500);
+    return () => clearInterval(id);
+  }, []);
+
   // clock: refresh once a minute, upgrade only when the digits changed
   const clockRef = useRef<string>("");
   useEffect(() => {
@@ -4318,6 +4376,19 @@ export function GlassesUI({
     }
   };
 
+  const setupVoicePreview = async (m: BeeperMessage) => {
+    if (voiceMsgId() === m.id) return; // already loaded for this message
+    const url = voiceAssetUrl(m, beeperBaseRef.current);
+    if (!url) return;
+    try {
+      const token = (await getApiConfig())?.token;
+      await loadVoice(url, m.id, token ? { Authorization: `Bearer ${token}` } : undefined);
+      setState((st) => ({ ...st })); // re-render: duration appears in the bar
+    } catch (e) {
+      console.warn("[voice] load failed:", String(e).slice(0, 100));
+    }
+  };
+
   const setupImagePreview = async (bridge: EvenAppBridge, m: BeeperMessage, layout: ReturnType<typeof imgLayoutFor>) => {
     imgMsgIdRef.current = m.id;
     const url = imageAssetUrl(m, beeperBaseRef.current);
@@ -4348,6 +4419,7 @@ export function GlassesUI({
       const items = layout.items;
       const videoFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "VIDEO";
       const imgFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "IMAGE";
+      const voiceFocus = !!items[0] && isVoiceMsg(items[0].msg);
       // focused message = full brightness; others one step dimmer; mic dims
       // when a message holds the focus
       const slotIdx = items.map((it) => snapshot.messages.indexOf(it.msg));
@@ -4453,6 +4525,7 @@ export function GlassesUI({
               new MenuItemProperty({ itemName: "Low-Priority Chats", itemID: MENU_LOW_PRIORITY }),
               new MenuItemProperty({ itemName: "Archived Chats", itemID: MENU_ARCHIVED }),
               new MenuItemProperty({ itemName: audioOnRef.current ? "Preview-audio: on" : "Preview-Audio: off", itemID: MENU_AUDIO }),
+              new MenuItemProperty({ itemName: `Playback-Speed: ${speedRef.current.toFixed(1)}`, itemID: MENU_SPEED }),
             ],
           }),
           textObject,
@@ -4478,6 +4551,7 @@ export function GlassesUI({
         else { unloadVideo(); videoLoopingRef.current = false; videoMsgIdRef.current = null; }
         if (imgFocus && imgLayout) void setupImagePreview(bridge, items[0].msg, imgLayout);
         else imgMsgIdRef.current = null;
+        if (voiceFocus) void setupVoicePreview(items[0].msg);
         return;
       }
       // upgrade ONLY containers whose content actually changed — upgrading an
@@ -4510,6 +4584,8 @@ export function GlassesUI({
         videoLoopingRef.current = false;
         videoMsgIdRef.current = null;
       }
+      if (voiceFocus) void setupVoicePreview(items[0].msg);
+      else if (voiceMsgId()) stopVoice(); // focus left the note → pause (keep loaded)
       if (imgFocus && imgLayout && imgMsgIdRef.current !== items[0].msg.id) {
         void setupImagePreview(bridge, items[0].msg, imgLayout);
       } else if (!imgFocus && imgMsgIdRef.current) {
@@ -4770,6 +4846,7 @@ export function GlassesUI({
     if (previousScreenRef.current !== state.currentScreen) {
       if (previousScreenRef.current === "messages" && state.currentScreen !== "messages") {
         unloadVideo();
+        unloadVoice();
         videoLoopingRef.current = false;
         videoMsgIdRef.current = null;
         gcSaveDraftNow(); // leaving the chat → persist compose as draft
@@ -4811,6 +4888,7 @@ export function GlassesUI({
         if (disposed) return;
 
         glassesBridgeRef.current = bridge;
+        void loadSpeedPref().then((v) => { speedRef.current = v; setVoiceSpeed(v); });
         void loadAudioPref().then((on) => {
           if (on !== audioOnRef.current) {
             audioOnRef.current = on;
@@ -4831,6 +4909,16 @@ export function GlassesUI({
           const menuId = event.menuItemClickEvent?.itemID ?? (event as any).jsonData?.itemID;
           if (menuId != null) {
             const id = menuId;
+            if (id === MENU_SPEED) {
+              const next = speedRef.current >= 2 ? 0.5 : Math.round((speedRef.current + 0.5) * 10) / 10;
+              speedRef.current = next;
+              setVoiceSpeed(next); // live: applies to the current playback
+              void persistSpeedPref(next);
+              msgSigRef.current = "";
+              glassesLayoutRef.current = null as any;
+              void flushGlassesDisplay();
+              return;
+            }
             if (id === MENU_AUDIO) {
               audioOnRef.current = !audioOnRef.current;
               setPreviewAudio(audioOnRef.current);
