@@ -696,6 +696,9 @@ async function getMediaLabel(chat: any, client: any): Promise<string> {
 }
 
 const avatarCache = new Map<string, string>(); // chatId -> dataURL of composed cell
+// avatar strip pushes: sequential chain + supersede counter (progressive render)
+let chatAvatarSeq = 0;
+let chatAvatarChain: Promise<void> = Promise.resolve();
 
 // 16px vector messenger glyphs (the 1-bit bitmaps in platformIcons render as
 // noise at this size — verified 31.10.). White shapes on the black backing box.
@@ -831,12 +834,17 @@ async function renderAvatarStrip(
   chats: any[],
   baseUrl: string | undefined,
 ): Promise<{ png1: number[]; png2: number[]; png3: number[] }> {
-  const cells: HTMLImageElement[] = [];
-  for (const c of chats) {
-    try {
-      cells.push(await loadImage(await composeAvatarCell(c, baseUrl)));
-    } catch {}
-  }
+  // load all cells CONCURRENTLY (sequential was ~1.5-2s per cold avatar →
+  // 8-10s on the first visit of a page; parallel ≈ one fetch round-trip)
+  const cells = await Promise.all(
+    chats.map(async (c) => {
+      try {
+        return await loadImage(await composeAvatarCell(c, baseUrl));
+      } catch {
+        return null;
+      }
+    }),
+  );
   const render = (from: number, to: number): number[] => {
     const h = (to - from) * AVH;
     const cv = document.createElement("canvas");
@@ -844,7 +852,8 @@ async function renderAvatarStrip(
     const ctx = cv.getContext("2d")!;
     ctx.fillStyle = "#000"; ctx.fillRect(0, 0, AV, h);
     for (let i = from; i < to && i < cells.length; i++) {
-      try { ctx.drawImage(cells[i], 0, (i - from) * AVH, AV, AVH); } catch {}
+      const cell = cells[i];
+      if (cell) { try { ctx.drawImage(cell, 0, (i - from) * AVH, AV, AVH); } catch {} }
     }
     // Quantize to the display's 16 gray levels: the G2 is 4-bit anyway, and
     // full-color photo PNGs (8-11KB/slice) stalled the BLE transfer until the
@@ -4122,17 +4131,25 @@ export function GlassesUI({
       const pageSig = `${filter}|${page}|${pageChats.map((c) => c.id).join(",")}`;
       const selSig = `${nav.highlightedIndex}`;
 
-      const pushAvatars = async () => {
-        try {
-          const strip = await renderAvatarStrip(pageChats, beeperBaseRef.current);
-          console.log("[chats] strip png:", strip.png1.length, strip.png2.length, strip.png3.length);
-          const r1 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 7, containerName: "av1", imageData: strip.png1 }));
-          const r2 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: "av2", imageData: strip.png2 }));
-          const r3 = await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "av3", imageData: strip.png3 }));
-          console.log("[chats] av updates:", JSON.stringify(r1), JSON.stringify(r2), JSON.stringify(r3));
-        } catch (e) {
-          console.warn("[chats] avatars failed:", String(e).slice(0, 150));
-        }
+      // fire-and-forget: the page text is already on the glasses when this
+      // runs; a newer page supersedes an in-flight strip (seq guard), and the
+      // promise chain keeps image sends strictly sequential (SDK requirement)
+      const pushAvatars = () => {
+        const seq = ++chatAvatarSeq;
+        chatAvatarChain = chatAvatarChain.then(async () => {
+          if (seq !== chatAvatarSeq) return;
+          try {
+            const strip = await renderAvatarStrip(pageChats, beeperBaseRef.current);
+            if (seq !== chatAvatarSeq) return;
+            await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 7, containerName: "av1", imageData: strip.png1 }));
+            if (seq !== chatAvatarSeq) return;
+            await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 8, containerName: "av2", imageData: strip.png2 }));
+            if (seq !== chatAvatarSeq) return;
+            await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 9, containerName: "av3", imageData: strip.png3 }));
+          } catch (e) {
+            console.warn("[chats] avatars failed:", String(e).slice(0, 150));
+          }
+        });
       };
 
       if (glassesLayoutRef.current !== "chats") {
@@ -4174,7 +4191,7 @@ export function GlassesUI({
           const bytes = await getSpineBytes();
           await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 6, containerName: "spine", imageData: bytes }));
         } catch (e) { console.warn("[chats] spine failed:", e); }
-        await pushAvatars();
+        pushAvatars();
         return;
       }
 
@@ -4186,7 +4203,7 @@ export function GlassesUI({
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 3, containerName: "markers", content: markerText }));
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 2, containerName: "xy", content: xyText }));
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 10, containerName: "label", content: labelText }));
-        await pushAvatars();
+        pushAvatars();
         return;
       }
 
