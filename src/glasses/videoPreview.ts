@@ -186,21 +186,20 @@ export function startLoop(sender: FrameSender, onDelivered?: PositionReporter) {
   video.muted = !audioOn;
   if (video.ended) { try { video.currentTime = 0; } catch { /* ignore */ } }
   void video.play().catch(() => { /* autoplay blocked: poster stays */ });
-  // deterministic 1 fps tick (Joel 02.11.): the bridge floor is ~1s/frame
-  // anyway — a decoder-driven tick only produced skipped frames + jitter
-  const tick = () => {
-    if (!running) return;
-    void pump().finally(() => { if (running) rafId = window.setTimeout(tick, LOOP_MS); });
-  };
-  rafId = window.setTimeout(tick, LOOP_MS);
+  // FIXED-RATE tick (Joel 02.11.): the old self-rescheduling chain waited
+  // LOOP_MS AFTER each send finished → period was send+1s (~0.5 fps). A plain
+  // interval keeps a true 1 Hz rhythm; pump() skips ticks while a send is
+  // still in flight, so a slow frame costs one skipped tick, never a
+  // compounding delay.
+  if (rafId) clearInterval(rafId);
+  rafId = window.setInterval(() => { if (running) void pump(); }, LOOP_MS);
 }
 
 export function stopLoop() {
   running = false;
   sendFrame = null;
   reportPos = null;
-  if (video) video.ontimeupdate = null;
-  if (rafId) { clearTimeout(rafId); rafId = 0; }
+  if (rafId) { clearInterval(rafId); rafId = 0; }
   try { video?.pause(); } catch { /* ignore */ }
 }
 
