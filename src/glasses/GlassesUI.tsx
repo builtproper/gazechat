@@ -1106,6 +1106,7 @@ function composeWindow(): string {
   }
   return (start > 0 ? "\u2039" : "") + text.slice(start, caret) + "|" + text.slice(caret, end) + (end < text.length ? "\u203a" : "");
 }
+let lastMirrorTxt: string | null = null;
 function mirrorCompose() { composeMirror?.(); }
 function syncFromInput(el: HTMLInputElement) {
   composeText = el.value;
@@ -1166,7 +1167,14 @@ export function gcArmCompose(on: boolean) {
   if (on) {
     composeWantFocus = true;
     el.focus({ preventScroll: true });
-    if (!composePoll) composePoll = setInterval(() => { if (composeArmed) syncFromInput(el); }, 80);
+    if (!composePoll) composePoll = setInterval(() => {
+      if (!composeArmed) return;
+      // only mirror on REAL changes — an identical-content upgrade still makes
+      // the firmware redraw the container (visible flicker while idle-typing)
+      const v = el.value;
+      const c = el.selectionStart ?? v.length;
+      if (v !== composeText || c !== composeCaret) syncFromInput(el);
+    }, 80);
   } else {
     composeWantFocus = false;
     try { el.blur(); } catch {}
@@ -3977,6 +3985,8 @@ export function GlassesUI({
         const b = glassesBridgeRef.current;
         if (!b) return;
         const txt = composeText ? composeWindow() : "Type on your phone or tap to record or transcribe";
+        if (txt === lastMirrorTxt) return;
+        lastMirrorTxt = txt;
         void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt, textColor: composeText ? 4 : 0 }));
       };
       // pad so the name starts clear of the avatar image (x 70..104)
