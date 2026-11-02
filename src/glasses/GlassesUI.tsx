@@ -49,7 +49,7 @@ import type { SpeechApiConfig } from "../services";
 import { getApiConfig } from "../services/config";
 import {
   loadVideo, posterFrame, startLoop, stopLoop, unloadVideo,
-  setPreviewAudio, videoCurrentTime, isFrameInFlight as videoFrameInFlight, VID_W, VID_H,
+  setPreviewAudio, videoCurrentTime, VID_W, VID_H,
 } from "./videoPreview";
 
 // ═══════════════════════════════════════════════════════════════
@@ -3971,10 +3971,12 @@ export function GlassesUI({
                     throw new Error("video preview superseded");
                   }
                   const r = await b.updateImageRawData(new ImageRawDataUpdate({ containerID: 14, containerName: "vid", imageData: bytes }));
-                  // SDK returns "success" or an error token (imageException /
-                  // imageToGray4Failed / sendFailed) — the loop uses false to
-                  // downgrade JPEG→PNG once
                   return r === "success" || (r as any) === true;
+                }, () => {
+                  // time rides the frame: refresh the transport line right
+                  // after each delivered image (deterministic 1 Hz, Joel 02.11.)
+                  videoPosRef.current = videoCurrentTime();
+                  setState((st) => ({ ...st }));
                 });
                 videoLoopingRef.current = true;
               }
@@ -4620,20 +4622,6 @@ export function GlassesUI({
       }
     }
   }, [ensureGlassesStartup, getDisplayLines, renderChatsPage, renderTextPage]);
-
-  // transport ticker: refresh position + progress bar once per second while
-  // a video preview loops (the message poll stays silent when nothing changed)
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      if (stateRef.current.currentScreen === "messages" && videoLoopingRef.current && videoMsgIdRef.current) {
-        // don't fire the bub0 text upgrade while an image send owns the bridge
-        if (videoFrameInFlight()) return;
-        videoPosRef.current = videoCurrentTime();
-        setState((st) => ({ ...st }));
-      }
-    }, 1000);
-    return () => clearInterval(id);
-  }, []);
 
   useEffect(() => {
     navRef.current.screen = state.currentScreen;

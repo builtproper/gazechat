@@ -14,6 +14,7 @@ export const VID_W = 288;
 export const VID_H = 144;
 
 export type FrameSender = (imgBytes: number[]) => Promise<boolean>;
+export type PositionReporter = () => void;
 
 let video: HTMLVideoElement | null = null;
 let canvas: HTMLCanvasElement | null = null;
@@ -23,6 +24,7 @@ let audioOn = false;
 let inFlight = false;
 let rafId = 0;
 let sendFrame: FrameSender | null = null;
+let reportPos: PositionReporter | null = null;
 
 function ensureEls(): { v: HTMLVideoElement; c: HTMLCanvasElement } | null {
   if (typeof document === "undefined") return null;
@@ -132,13 +134,16 @@ async function pump() {
   try {
     const bytes = await grabFramePng(canvas);
     if (bytes) await sendFrame(bytes);
+    // time rides the frame: report position right AFTER the delivery so the
+    // transport line always shows the timestamp of what just landed (1 Hz)
+    if (running && reportPos) reportPos();
   } catch { /* superseded or hiccup: stopLoop ends the loop via running */ }
   inFlight = false;
 }
 
-const LOOP_MS = 500; // 2 fps (Joel 02.11.: transport is format-independent —
-// the host always expands to the same 20.7KB gray4 buffer, so PNG
-// wins on quality; a slower tick just leaves BLE headroom)
+const LOOP_MS = 1000; // 1 fps (Joel 02.11.: measured bridge floor is ~1s per
+// frame regardless of payload tricks — a slower tick just wastes battery, a
+// faster one only produces dropped ticks)
 
 /** Load a video blob URL; resolves once the first frame is available. */
 export function loadVideo(blobUrl: string): Promise<{ duration: number }> {
@@ -172,20 +177,17 @@ export async function posterFrame(): Promise<number[] | null> {
 }
 
 /** Start the ~5 fps loop. The sender must await the actual BLE write. */
-export function startLoop(sender: FrameSender) {
+export function startLoop(sender: FrameSender, onDelivered?: PositionReporter) {
   const els = ensureEls();
   if (!els || !video) return;
   sendFrame = sender;
+  reportPos = onDelivered ?? null;
   running = true;
   video.muted = !audioOn;
   if (video.ended) { try { video.currentTime = 0; } catch { /* ignore */ } }
   void video.play().catch(() => { /* autoplay blocked: poster stays */ });
-  // PRIMARY tick: the media pipeline itself. iOS clamps setTimeout chains in
-  // background/throttled WebViews (phone screen off!) to ~1s — matching the
-  // observed ceiling. timeupdate fires from the video decoder (~4Hz) and is
-  // not a JS timer, so it survives throttling.
-  video.ontimeupdate = () => { if (running) void pump(); };
-  // BACKUP tick: covers paused video / sources without timeupdate
+  // deterministic 1 fps tick (Joel 02.11.): the bridge floor is ~1s/frame
+  // anyway — a decoder-driven tick only produced skipped frames + jitter
   const tick = () => {
     if (!running) return;
     void pump().finally(() => { if (running) rafId = window.setTimeout(tick, LOOP_MS); });
@@ -196,6 +198,7 @@ export function startLoop(sender: FrameSender) {
 export function stopLoop() {
   running = false;
   sendFrame = null;
+  reportPos = null;
   if (video) video.ontimeupdate = null;
   if (rafId) { clearTimeout(rafId); rafId = 0; }
   try { video?.pause(); } catch { /* ignore */ }
@@ -209,9 +212,6 @@ export function setPreviewAudio(on: boolean) {
 export function getPreviewAudio() { return audioOn; }
 
 export function isPlaying() { return running && !!video && !video.paused; }
-/** true while a frame crosses the bridge — other writers (transport ticker)
- *  should hold off: overlapping bridge writes race (matic-even H5). */
-export function isFrameInFlight() { return inFlight; }
 export function togglePlay(): boolean {
   if (!video || !running) return false;
   if (video.paused) { void video.play().catch(() => {}); } else { video.pause(); }
