@@ -13,7 +13,7 @@
 export const VID_W = 288;
 export const VID_H = 144;
 
-export type FrameSender = (imgBase64: string) => Promise<boolean>;
+export type FrameSender = (imgBytes: number[]) => Promise<boolean>;
 
 let video: HTMLVideoElement | null = null;
 let canvas: HTMLCanvasElement | null = null;
@@ -51,7 +51,7 @@ function ensureEls(): { v: HTMLVideoElement; c: HTMLCanvasElement } | null {
  *  (~165k iterations/frame) was redundant CPU that capped the phone at ~0.7 fps.
  *  ctx.filter does the greyscale natively; if a WebView lacks it the color PNG
  *  still renders (host discards chroma). */
-function grabFrame(c: HTMLCanvasElement): string | null {
+function grabFrame(c: HTMLCanvasElement): number[] | null {
   const v = video!;
   if (!v.videoWidth || !v.videoHeight) return null;
   const ctx = c.getContext("2d")!;
@@ -63,10 +63,11 @@ function grabFrame(c: HTMLCanvasElement): string | null {
   ctx.filter = "grayscale(1)";
   ctx.drawImage(v, (VID_W - w) / 2, (VID_H - h) / 2, w, h);
   ctx.filter = "none";
-  // base64 WITHOUT decoding to number[]: the SDK accepts a base64 PNG string,
-  // and one string field crosses the JS→Flutter bridge far cheaper than a
-  // 15k-entry JSON array (per-frame serialization was a hidden bottleneck)
-  return c.toDataURL("image/png").split(",")[1] || "";
+  // number[] PNG bytes — the documented-safe format. A base64 string is
+  // accepted by the SDK types but the host rendered nothing with it
+  // (transparent image, 02.11. device-verified) → do not switch back.
+  const url = c.toDataURL("image/png");
+  return Array.from(atob(url.split(",")[1] || ""), (ch) => ch.charCodeAt(0));
 }
 
 async function pump() {
@@ -105,7 +106,7 @@ export function loadVideo(blobUrl: string): Promise<{ duration: number }> {
 }
 
 /** Single still (poster): seek near the start, grab one frame. */
-export async function posterFrame(): Promise<string | null> {
+export async function posterFrame(): Promise<number[] | null> {
   const els = ensureEls();
   if (!els || !video) return null;
   const v = video;
