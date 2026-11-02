@@ -997,6 +997,9 @@ function wrapToPx(text: string, maxPx: number): string[] {
   return out.length ? out : [""];
 }
 
+// set by the renderer/scroll handler: group chats prefix foreign messages
+// with the sender name so you know who wrote what
+let msgIsGroup = false;
 function msgBubbleText(msg: BeeperMessage, all: BeeperMessage[]): string {
   let t = stripUnsupportedChars(formatMessageText(msg)).replace(/\r/g, "").trim();
   if (!t || t === "[media]") {
@@ -1010,6 +1013,11 @@ function msgBubbleText(msg: BeeperMessage, all: BeeperMessage[]): string {
       const lt = stripUnsupportedChars(formatMessageText(linked)).replace(/\n/g, " ").trim();
       if (lt) t = "Answer to: " + truncatePx(lt, 300) + "\n" + t;
     }
+  }
+  // group chats: "Name wrote:" on its own line above foreign messages
+  if (msgIsGroup && !msg.isSender) {
+    const who = (msg.senderName || "").trim();
+    if (who) t = truncatePx(who, 300) + " wrote:\n" + t;
   }
   return t;
 }
@@ -3895,6 +3903,7 @@ export function GlassesUI({
           if (snapshot.currentScreen === "messages") {
             const messages = snapshot.messages;
             if (messages.length === 0) return nav;
+            msgIsGroup = (snapshot.chats.find((c) => c.id === snapshot.selectedChat) as { type?: string } | undefined)?.type === "group";
             if (!inputHintGone) {
               inputHintGone = true;
               void glassesBridgeRef.current?.textContainerUpgrade(
@@ -4285,6 +4294,7 @@ export function GlassesUI({
   const renderMessagesPage = useCallback(
     async (bridge: EvenAppBridge, snapshot: AppState, _nav: GlassNavState) => {
       const chat = snapshot.chats.find((c) => c.id === snapshot.selectedChat);
+      msgIsGroup = (chat as { type?: string } | undefined)?.type === "group";
       const chatName = chat ? truncatePx(chat.title, 300) : "Messages";
       const focus = Math.min(msgFocusRef.current, Math.max(0, snapshot.messages.length - 1));
       const layout = computeMsgLayout(snapshot.messages, msgBlockRef.current, snapshot.isLoading, focus);
