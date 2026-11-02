@@ -4049,6 +4049,7 @@ export function GlassesUI({
       const focus = Math.min(msgFocusRef.current, Math.max(0, snapshot.messages.length - 1));
       const layout = computeMsgLayout(snapshot.messages, msgBlockRef.current, snapshot.isLoading, focus);
       const items = layout.items;
+      const videoFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "VIDEO";
       // focused message = full brightness; others one step dimmer; mic dims
       // when a message holds the focus
       const slotIdx = items.map((it) => snapshot.messages.indexOf(it.msg));
@@ -4065,8 +4066,7 @@ export function GlassesUI({
         const tag = msgDateTag(it.msg.timestamp);
         const rx = reactionText(it.msg);
         const tstr = formatTime(it.msg.timestamp);
-        const dur = isVid ? fmtDur(videoDurRef.current) : "";
-        const head = (tag ? `${tag} ${tstr}` : tstr) + (dur ? ` ${dur}` : "");
+        const head = tag ? `${tag} ${tstr}` : tstr;
         const focused = focus === slotIdx[i];
         // the focus space rides the fit-check so it can NEVER cause a wrap:
         // one line if head+marker+space fits, else marker drops below, else
@@ -4091,7 +4091,7 @@ export function GlassesUI({
         // bubble gets an invisible trailing space (wrap-safe: lines break at
         // bubbleW−14, the 6px space fits in the reserve). Never do this in
         // the time container — its lines sit right at the wrap limit.
-        return { bubble: isVid ? (videoLoopingRef.current ? "|| tap to pause" : "> tap to play") : it.lines.join("\n") + (bright === 4 ? " " : ""), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
+        return { bubble: isVid ? `${fmtDur(videoDurRef.current)} · ` + (videoLoopingRef.current ? "|| pause" : "> play") : it.lines.join("\n") + (bright === 4 ? " " : ""), time: timeTxt, y: 0, h: bh, th, timeY: 0, bx, tx, isMine, bright, show: true };
       });
       // stack slots top-down at their natural heights; center time beside bubble
       let y = MSG_AREA_Y;
@@ -4103,7 +4103,7 @@ export function GlassesUI({
       }
       // shape = focus mode + per-slot geometry (page change → rebuild, which is
       // correct: new messages = new content); stable within a page → upgrades
-      const shape = (layout.focus ? "F" : "N") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}:${s.y}` : "x")).join("");
+      const shape = (layout.focus ? "F" : "N") + (videoFocus ? "V" : "") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}:${s.y}` : "x")).join("");
       msgTopNameRef.current = chatName;
       // phone typing mirrors live into the glasses input container
       composeMirror = () => {
@@ -4123,7 +4123,6 @@ export function GlassesUI({
       const needRebuild = glassesLayoutRef.current !== "messages" || msgSigRef.current.split("#")[0] !== shape;
       msgSigRef.current = shape + "#" + contentSig;
 
-      const videoFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "VIDEO";
       const mk = (id: number, name: string, x: number, w: number, sy: number, sh: number, content: string, border: number, bright?: number, capture = false) =>
         new TextContainerProperty({ containerID: id, containerName: name, xPosition: x, yPosition: sy, width: w, height: sh, paddingLength: 2, borderWidth: border, borderColor: border ? 3 : 0, borderRadius: border ? 6 : 0, content, textColor: bright, isEventCapture: capture ? 1 : 0, zOrderIndex: id });
 
@@ -4131,7 +4130,7 @@ export function GlassesUI({
         new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 1, yPosition: 2, width: 574, height: 38, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 0, zOrderIndex: 1 }),
         mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show && !videoFocus ? 1 : 0, slots[0].bright),
         mk(3, "time0", slots[0].tx, TIME_W, slots[0].timeY, slots[0].th, slots[0].time, 0, slots[0].bright === 4 ? 2 : 1),
-        mk(4, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0, slots[1].bright),
+        mk(4, "bub1", ...(videoFocus ? ([142, 292, 86, 148, " ", 1, 1] as const) : ([slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0, slots[1].bright] as const))),
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, slots[1].bright === 4 ? 2 : 1),
         mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0, slots[2].bright),
         mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, slots[2].th, slots[2].time, 0, slots[2].bright === 4 ? 2 : 1),
@@ -4189,6 +4188,13 @@ export function GlassesUI({
         if (msgLastContentRef.current[id] === key) continue;
         msgLastContentRef.current[id] = key;
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: id, containerName: name, content, textColor: bright }));
+      }
+      if (videoFocus && videoMsgIdRef.current !== items[0].msg.id) {
+        void setupVideoPreview(bridge, items[0].msg);
+      } else if (!videoFocus && videoMsgIdRef.current) {
+        unloadVideo();
+        videoLoopingRef.current = false;
+        videoMsgIdRef.current = null;
       }
     },
     [],
