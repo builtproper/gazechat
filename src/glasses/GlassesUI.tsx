@@ -698,7 +698,7 @@ async function getMediaLabel(chat: any, client: any): Promise<string> {
       const last = rs[rs.length - 1] as { reactionKey?: string; emoji?: unknown } | undefined;
       const key = last?.reactionKey ?? (typeof last?.emoji === "string" ? last.emoji : "");
       const orig = String((linked as any)?.text || "").replace(/\n/g, " ").trim();
-      label = "Reacted" + (key ? ` ${key}` : "") + (orig ? ` to: ${orig.slice(0, 15)}...` : "");
+      label = "Reacted" + (key ? ` ${key}` : "") + (orig ? ` to: ${orig.slice(0, 25)}...` : "");
     }
     else if (t) label = "Attachment";
   } catch {}
