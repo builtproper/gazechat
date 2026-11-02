@@ -4454,12 +4454,23 @@ export function GlassesUI({
           });
           const txt = fresh.map((pv) => `\n${pv}`).join("\n");
           void bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 5, containerName: "preview", content: txt, textColor: 1 }));
+          // keep the fill's text authoritative until the page actually changes
         }).catch(() => {});
       }
       const namesText = empty
         ? "No chats"
         : nameCol.map((n) => `${n}\n`).join("\n").replace(/\n+$/, "");
-      const prevText = empty ? " " : prevCol.map((pv) => `\n${pv}`).join("\n");
+      // computed lazily: prevCol is a snapshot from the TOP of this render —
+      // writing it later (after awaited upgrades) clobbered background label
+      // fills that resolved in between (reactions flashed then vanished)
+      const buildPrevText = () => {
+        const live = pageChats.map((c) => {
+          const raw = prevRaw(c);
+          return fmtPrev(raw.trim() ? raw : mediaTypeCache.get(c.id) ?? "");
+        });
+        return empty ? " " : live.map((pv) => `\n${pv}`).join("\n");
+      };
+      const prevText = buildPrevText();
       // 9 lines (drop the trailing blank) so the 274px marker container never
       // overflows — overflow made the firmware scroll-jump on every upgrade
       const markerText = empty ? " " : markCol.map((m) => `${m}\n `).join("\n").replace(/\n $/, "");
@@ -4544,7 +4555,7 @@ export function GlassesUI({
         chatPageSigRef.current = pageSig;
         chatSelSigRef.current = selSig;
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 4, containerName: "names", content: namesText }));
-        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 5, containerName: "preview", content: prevText }));
+        await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 5, containerName: "preview", content: buildPrevText() }));
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 3, containerName: "markers", content: markerText }));
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 2, containerName: "xy", content: xyText }));
         await bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 10, containerName: "label", content: labelText }));
