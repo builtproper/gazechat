@@ -3935,7 +3935,9 @@ export function GlassesUI({
               : focus;
             const p = eff < 0 ? pages[0] : msgPageFor(pages, eff);
             const blocksOf = (m: BeeperMessage) =>
-              Math.max(1, Math.ceil(wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14).length / MSG_MAX_LINES));
+              (m.type || "").toUpperCase() === "IMAGE" || (m.type || "").toUpperCase() === "VIDEO"
+                ? 1
+                : Math.max(1, Math.ceil(wrapToPx(msgBubbleText(m, messages), msgGeom(m.isSender).bubbleW - 14).length / MSG_MAX_LINES));
             let newFocus = eff;
             let newBlock = msgBlockRef.current;
             // block-paging only for tall TEXT (ownsPage + >1 block). A video or
@@ -3946,7 +3948,7 @@ export function GlassesUI({
               const nb = blocksOf(messages[eff]);
               if (down && newBlock < nb - 1) newBlock++;
               else if (!down && newBlock > 0) newBlock--;
-              else if (down) { newFocus = eff < messages.length - 1 ? eff + 1 : -1; newBlock = newFocus >= 0 ? Math.max(0, blocksOf(messages[newFocus]) - 1) : 0; } // → next msg / mic
+              else if (down) { newFocus = eff < messages.length - 1 ? eff + 1 : -1; newBlock = 0; } // → next msg / mic
               else { const pi = pages.indexOf(p); newFocus = pi >= 0 && pi < pages.length - 1 ? pages[pi + 1].end : eff; }
             } else if (down) {
               // walk toward the mic one message at a time so you can always
@@ -3954,7 +3956,6 @@ export function GlassesUI({
               if (eff < 0) { newFocus = -1; }
               else if (eff < messages.length - 1) { newFocus = eff + 1; newBlock = 0; }
               else { newFocus = -1; } // newest message → mic
-              if (newFocus >= 0) newBlock = Math.max(0, blocksOf(messages[newFocus]) - 1);
             } else {
               // up
               if (eff < 0) { newFocus = p.end; newBlock = Math.max(0, blocksOf(messages[p.end]) - 1); }
