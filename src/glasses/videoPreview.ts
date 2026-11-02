@@ -13,7 +13,7 @@
 export const VID_W = 288;
 export const VID_H = 144;
 
-export type FrameSender = (imgBytes: number[]) => Promise<boolean>;
+export type FrameSender = (imgBase64: string) => Promise<boolean>;
 
 let video: HTMLVideoElement | null = null;
 let canvas: HTMLCanvasElement | null = null;
@@ -51,7 +51,7 @@ function ensureEls(): { v: HTMLVideoElement; c: HTMLCanvasElement } | null {
  *  (~165k iterations/frame) was redundant CPU that capped the phone at ~0.7 fps.
  *  ctx.filter does the greyscale natively; if a WebView lacks it the color PNG
  *  still renders (host discards chroma). */
-function grabFrame(c: HTMLCanvasElement): number[] | null {
+function grabFrame(c: HTMLCanvasElement): string | null {
   const v = video!;
   if (!v.videoWidth || !v.videoHeight) return null;
   const ctx = c.getContext("2d")!;
@@ -63,8 +63,10 @@ function grabFrame(c: HTMLCanvasElement): number[] | null {
   ctx.filter = "grayscale(1)";
   ctx.drawImage(v, (VID_W - w) / 2, (VID_H - h) / 2, w, h);
   ctx.filter = "none";
-  const url = c.toDataURL("image/png");
-  return Array.from(atob(url.split(",")[1] || ""), (ch) => ch.charCodeAt(0));
+  // base64 WITHOUT decoding to number[]: the SDK accepts a base64 PNG string,
+  // and one string field crosses the JS→Flutter bridge far cheaper than a
+  // 15k-entry JSON array (per-frame serialization was a hidden bottleneck)
+  return c.toDataURL("image/png").split(",")[1] || "";
 }
 
 async function pump() {
@@ -103,7 +105,7 @@ export function loadVideo(blobUrl: string): Promise<{ duration: number }> {
 }
 
 /** Single still (poster): seek near the start, grab one frame. */
-export async function posterFrame(): Promise<number[] | null> {
+export async function posterFrame(): Promise<string | null> {
   const els = ensureEls();
   if (!els || !video) return null;
   const v = video;
@@ -122,8 +124,12 @@ export function startLoop(sender: FrameSender) {
   video.muted = !audioOn;
   if (video.ended) { try { video.currentTime = 0; } catch { /* ignore */ } }
   void video.play().catch(() => { /* autoplay blocked: poster stays */ });
-  // self-rescheduling timer: a repeating tick is robust where the rVFC
-  // callback chain stalled after one frame on device (02.11.)
+  // PRIMARY tick: the media pipeline itself. iOS clamps setTimeout chains in
+  // background/throttled WebViews (phone screen off!) to ~1s — matching the
+  // observed ceiling. timeupdate fires from the video decoder (~4Hz) and is
+  // not a JS timer, so it survives throttling.
+  video.ontimeupdate = () => { if (running) void pump(); };
+  // BACKUP tick: covers paused video / sources without timeupdate
   const tick = () => {
     if (!running) return;
     void pump().finally(() => { if (running) rafId = window.setTimeout(tick, LOOP_MS); });
@@ -134,6 +140,7 @@ export function startLoop(sender: FrameSender) {
 export function stopLoop() {
   running = false;
   sendFrame = null;
+  if (video) video.ontimeupdate = null;
   if (rafId) { clearTimeout(rafId); rafId = 0; }
   try { video?.pause(); } catch { /* ignore */ }
 }
