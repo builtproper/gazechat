@@ -3021,6 +3021,11 @@ export function GlassesUI({
         if (stateRef.current.currentScreen !== "messages") {
           return;
         }
+        // a looping video owns the bridge: the 1s message poll competes with
+        // image sends (measured: send time tracks bridge traffic, not bytes)
+        if (videoLoopingRef.current) {
+          return;
+        }
         if (suppressReloadRef.current) {
           return;
         }
