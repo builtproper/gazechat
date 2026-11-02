@@ -4036,7 +4036,6 @@ export function GlassesUI({
         [5, "time1", textObject[4].content ?? "", slots[1].bright === 4 ? 2 : 1],
         [6, "bub2", textObject[5].content ?? "", slots[2].bright],
         [7, "time2", textObject[6].content ?? "", slots[2].bright === 4 ? 2 : 1],
-        [11, "input", textObject[7].content ?? "", composeText ? 4 : 0],
       ];
       for (const [id, name, content, bright] of defs) {
         const key = `${content}@@${bright}`;
