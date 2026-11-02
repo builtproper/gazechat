@@ -453,7 +453,7 @@ export class BeeperClient {
   async listMessages(chatID: string, options?: {
     cursor?: string
     direction?: 'after' | 'before'
-  }): Promise<{ messages: BeeperMessage[]; cursor?: string }> {
+  }): Promise<{ messages: BeeperMessage[]; cursor?: string; hasMore?: boolean }> {
     const params = new URLSearchParams()
     if (options?.cursor) params.set('cursor', options.cursor)
     if (options?.direction) params.set('direction', options.direction)
@@ -473,6 +473,7 @@ export class BeeperClient {
     return {
       messages: (data.items || data.messages || []).map(normalizeMessage),
       cursor: data.oldestCursor || data.cursor,
+      hasMore: !!data.hasMore,
     }
   }
 

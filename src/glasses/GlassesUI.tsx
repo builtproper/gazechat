@@ -1074,6 +1074,9 @@ function buildMsgPages(messages: BeeperMessage[]): MsgPage[] {
     if (ownsPage(messages[i], messages)) { pages.push({ start: i, end: i }); i--; continue; }
     let s = i, total = msgNatH(messages[i], messages), count = 1;
     while (s > 0 && count < 3) {
+      // media owns its page — packing it with neighbours (its "[Video]" text
+      // is 1 line tall) delayed the preview until the focus passed through
+      if (ownsPage(messages[s - 1], messages)) break;
       const ph = msgNatH(messages[s - 1], messages);
       if (ph > MSG_AREA_H || total + ph + MSG_GAP > MSG_AREA_H) break;
       s--; count++; total += ph + MSG_GAP;
@@ -2137,6 +2140,11 @@ export function GlassesUI({
   const msgFocusRef = useRef<number>(-1); // focused msg index, -1 = mic
   const micDimRef = useRef<boolean>(false);
   const videoMsgIdRef = useRef<string | null>(null);
+  // older-history paging (Beeper paginates messages too; up-scroll at the
+  // top of the loaded window must fetch older ones instead of dead-ending)
+  const msgCursorRef = useRef<string | null>(null);
+  const msgHasMoreRef = useRef<boolean>(false);
+  const msgLoadingMoreRef = useRef<boolean>(false);
   const videoDurRef = useRef<number>(0);
   const videoPosRef = useRef<number>(0);
   const audioOnRef = useRef<boolean>(false);
@@ -3534,6 +3542,37 @@ export function GlassesUI({
     }
   }
 
+  // fetch the next older page of messages and prepend (up-scroll at the top).
+  // NOTE: called from the memoized scroll handler → must read the client from
+  // the REF (the closure's `beeper` is stale/null there, sim-verified 02.11.)
+  async function loadOlderMessages(chatId: string) {
+    const client = beeperRef.current;
+    if (!client || msgLoadingMoreRef.current || !msgCursorRef.current) return;
+    msgLoadingMoreRef.current = true;
+    try {
+      const res = await client.listMessages(chatId, { cursor: msgCursorRef.current, direction: "before" });
+      if (!res.messages.length) { msgHasMoreRef.current = false; return; }
+      const older = res.messages
+        .filter((m) => (m.type || "").toUpperCase() !== "REACTION" && !(m as { isHidden?: boolean }).isHidden)
+        .reverse();
+      setState((st) => {
+        if (st.selectedChat !== chatId) return st;
+        const seen = new Set(st.messages.map((m) => m.id));
+        const fresh = older.filter((m) => !seen.has(m.id));
+        if (!fresh.length) return st;
+        // keep the focused message under the cursor after the prepend
+        if (msgFocusRef.current >= 0) msgFocusRef.current += fresh.length;
+        return { ...st, messages: [...fresh, ...st.messages] };
+      });
+      msgCursorRef.current = res.cursor ?? null;
+      msgHasMoreRef.current = !!res.hasMore && !!res.cursor;
+    } catch (e) {
+      console.warn("[msgs] loadOlder failed:", String(e).slice(0, 80));
+    } finally {
+      msgLoadingMoreRef.current = false;
+    }
+  }
+
   // Load messages
   async function loadMessages(
     chatId: string,
@@ -3587,6 +3626,8 @@ export function GlassesUI({
       }
 
       const result = await beeper.listMessages(chatId);
+      msgCursorRef.current = result.cursor ?? null;
+      msgHasMoreRef.current = !!result.hasMore;
       // REACTION messages are not bubbles: Beeper marks them isHidden and
       // attaches the reaction to the ORIGINAL message (reactions[]). Show
       // them as a marker after the time instead of a "[media]" bubble.
@@ -3824,14 +3865,22 @@ export function GlassesUI({
               // up
               if (eff < 0) { newFocus = p.end; newBlock = Math.max(0, blocksOf(messages[p.end]) - 1); }
               else if (eff > p.start) { newFocus = eff - 1; newBlock = Math.max(0, blocksOf(messages[eff - 1]) - 1); }
-              else { const pi = pages.indexOf(p); newFocus = pi >= 0 && pi < pages.length - 1 ? pages[pi + 1].end : eff; newBlock = 0; }
+              else {
+                const pi = pages.indexOf(p);
+                if (pi === pages.length - 1 && eff === 0 && msgHasMoreRef.current && snapshot.selectedChat) {
+                  // top of the loaded window: pull in older messages instead
+                  // of dead-ending (the video was the oldest loaded msg)
+                  void loadOlderMessages(snapshot.selectedChat);
+                  newFocus = eff;
+                } else {
+                  newFocus = pi >= 0 && pi < pages.length - 1 ? pages[pi + 1].end : eff;
+                }
+                newBlock = 0;
+              }
             }
             // landing back on the mic only makes sense from the true newest
             if (focus < 0 && newFocus === messages.length - 1 && eff === newFocus) newFocus = -1;
             newFocus = Math.max(-1, Math.min(newFocus, messages.length - 1));
-            if ((messages[eff] && (messages[eff].type || "").toUpperCase() === "VIDEO") || (messages[newFocus] && (messages[newFocus].type || "").toUpperCase() === "VIDEO")) {
-              console.log("[vidscroll]", JSON.stringify({ focus, eff, newFocus, down, pStart: p.start, pEnd: p.end, pages: pages.length, pi: pages.indexOf(p), last: messages.length - 1 }));
-            }
             if (newFocus !== focus || newBlock !== msgBlockRef.current) {
               msgBlockRef.current = newBlock;
               msgFocusRef.current = newFocus;
