@@ -60,12 +60,33 @@ function grabFrame(c: HTMLCanvasElement): number[] | null {
   ctx.fillRect(0, 0, VID_W, VID_H);
   const scale = Math.max(VID_W / v.videoWidth, VID_H / v.videoHeight);
   const w = v.videoWidth * scale, h = v.videoHeight * scale;
+  ctx.drawImage(v, (VID_W - w) / 2, (VID_H - h) / 2, w, h);
+  ctx.filter = "none";
+  // RAW grayscale bytes (1/px, exactly container size) instead of PNG:
+  // measured 02.11. — grab(PNG) only 9-37ms but send 690-1630ms for an
+  // 80K-entry number[]; the cost is bridge serialization + host PNG decode.
+  // Raw gray = 41,472 entries, no PNG anywhere (host still does imageToGray4).
+  const img = ctx.getImageData(0, 0, VID_W, VID_H).data;
+  const gray = new Array(VID_W * VID_H);
+  for (let i = 0, p = 0; i < img.length; i += 4, p++) {
+    gray[p] = (img[i] * 77 + img[i + 1] * 150 + img[i + 2] * 29) >> 8; // BT.601 int
+  }
+  return gray;
+}
+
+/** PNG-encoded frame (poster path — the documented-safe format). */
+function grabFramePng(c: HTMLCanvasElement): number[] | null {
+  const v = video!;
+  if (!v.videoWidth || !v.videoHeight) return null;
+  const ctx = c.getContext("2d")!;
+  ctx.filter = "none";
+  ctx.fillStyle = "#000";
+  ctx.fillRect(0, 0, VID_W, VID_H);
+  const scale = Math.max(VID_W / v.videoWidth, VID_H / v.videoHeight);
+  const w = v.videoWidth * scale, h = v.videoHeight * scale;
   ctx.filter = "grayscale(1)";
   ctx.drawImage(v, (VID_W - w) / 2, (VID_H - h) / 2, w, h);
   ctx.filter = "none";
-  // number[] PNG bytes — the documented-safe format. A base64 string is
-  // accepted by the SDK types but the host rendered nothing with it
-  // (transparent image, 02.11. device-verified) → do not switch back.
   const url = c.toDataURL("image/png");
   return Array.from(atob(url.split(",")[1] || ""), (ch) => ch.charCodeAt(0));
 }
@@ -117,7 +138,7 @@ export async function posterFrame(): Promise<number[] | null> {
   if (v.readyState < 2) await new Promise((r) => { v.addEventListener("loadeddata", r, { once: true }); });
   try { v.currentTime = Math.min(0.5, (v.duration || 1) / 3); } catch { /* some sources refuse */ }
   await new Promise((r) => { v.addEventListener("seeked", r, { once: true }); setTimeout(r, 600); });
-  return grabFrame(els.c);
+  return grabFramePng(els.c);
 }
 
 /** Start the ~5 fps loop. The sender must await the actual BLE write. */
