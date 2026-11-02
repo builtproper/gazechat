@@ -399,8 +399,10 @@ export class BeeperClient {
   async listChatsUpTo(
     max: number,
     options?: { accountIDs?: string[] },
+    onPartial?: (chatsSoFar: BeeperChat[]) => void,
   ): Promise<{ chats: BeeperChat[]; cursor?: string }> {
     const all: BeeperChat[] = []
+    const seen = new Set<string>()
     let cursor: string | undefined
     // hard page cap so a chatty cursor can never loop forever
     for (let page = 0; page < 12; page++) {
@@ -410,14 +412,16 @@ export class BeeperClient {
         accountIDs: options?.accountIDs,
       })
       if (!res.chats.length) break
-      all.push(...res.chats)
+      for (const c of res.chats) {
+        if (!seen.has(c.id)) { seen.add(c.id); all.push(c) }
+      }
       cursor = res.cursor
+      // hand the caller what we have after EVERY page — the first 25 chats
+      // render immediately instead of waiting for the full cold-start crawl
+      onPartial?.(all.slice(0, max))
       if (all.length >= max || !res.hasMore || !cursor) break
     }
-    // dedupe by id (cursors can overlap by one entry)
-    const seen = new Set<string>()
-    const chats = all.filter((c) => (seen.has(c.id) ? false : (seen.add(c.id), true)))
-    return { chats: chats.slice(0, max), cursor }
+    return { chats: all.slice(0, max), cursor }
   }
 
   /**

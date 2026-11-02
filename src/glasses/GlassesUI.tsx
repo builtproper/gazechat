@@ -3435,8 +3435,20 @@ export function GlassesUI({
         throw new Error("Beeper is not configured");
       }
 
+      const applyChats = (list: typeof state.chats, loading: boolean | undefined) => {
+        setState((s) => {
+          const sameChats = areChatsEqual(s.chats, list);
+          const sameLoading = loading === undefined ? true : s.isLoading === loading;
+          const sameSetup = !s.setupRequired;
+          if (sameChats && sameLoading && sameSetup) return s;
+          return { ...s, chats: list, isLoading: loading ?? s.isLoading, setupRequired: false };
+        });
+      };
       const result = await beeper.listChatsUpTo(75,
         accountId ? { accountIDs: [accountId] } : undefined,
+        // first page lands immediately (cold start used to sit on "No chats"
+        // until all 3 pages had crawled through)
+        (partial) => applyChats(partial, partial.length ? false : undefined),
       );
       const finalChats = result.chats;
       // PROBE (one-time): log the real fields the live API returns, so we know
@@ -3452,35 +3464,22 @@ export function GlassesUI({
         console.log("[probe] participant keys:", p ? Object.keys(p).join(",") : "NONE");
         console.log("[probe] imgURL:", p?.imgURL ?? "NONE");
       }
-      setState((s) => {
-        const sameChats = areChatsEqual(s.chats, finalChats);
-        const sameLoading = options?.silent ? true : s.isLoading === false;
-        const sameSetup = !s.setupRequired;
-
-        if (sameChats && sameLoading && sameSetup) {
-          return s;
-        }
-
-        return {
-          ...s,
-          chats: finalChats,
-          isLoading: options?.silent ? s.isLoading : false,
-          setupRequired: false,
-        };
-      });
+      applyChats(finalChats, options?.silent ? undefined : false);
     } catch {
+      // a FAILED background poll must not wipe a populated list (that flashed
+      // "No chats" until the next poll restored it) — only an initial load
+      // with nothing on screen yet may show the setup-required state
       setState((s) => {
-        const sameChats = s.chats.length === 0;
+        if (s.chats.length > 0) {
+          const sameLoading = options?.silent ? true : s.isLoading === false;
+          if (sameLoading && !s.setupRequired) return s;
+          return { ...s, isLoading: options?.silent ? s.isLoading : false };
+        }
         const sameLoading = options?.silent ? true : s.isLoading === false;
         const sameSetup = s.setupRequired;
-
-        if (sameChats && sameLoading && sameSetup) {
-          return s;
-        }
-
+        if (sameLoading && sameSetup) return s;
         return {
           ...s,
-          chats: [],
           isLoading: options?.silent ? s.isLoading : false,
           setupRequired: true,
         };
