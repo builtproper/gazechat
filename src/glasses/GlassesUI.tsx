@@ -51,6 +51,7 @@ import {
   loadVideo, posterFrame, startLoop, stopLoop, unloadVideo,
   setPreviewAudio, videoCurrentTime, VID_W, VID_H,
 } from "./videoPreview";
+import { imgLayout as imgLayoutFor, renderImageSlices } from "./imagePreview";
 
 // ═══════════════════════════════════════════════════════════════
 // DISPLAY CONSTANTS
@@ -1029,6 +1030,17 @@ const MSG_GAP = 6;
 const MSG_AREA_Y = 44;
 const MSG_AREA_H = 200; // y 44..244 (input bar below)
 const MSG_MAX_LINES = Math.floor((MSG_AREA_H - MSG_RESERVE) / MSG_LINE_H); // 7
+function attachmentAspect(m: BeeperMessage): number {
+  const sz = (m.attachments as any[])?.[0]?.size;
+  const w = Number(sz?.width) || 0, h = Number(sz?.height) || 0;
+  return w > 0 && h > 0 ? w / h : 1;
+}
+function imageAssetUrl(m: BeeperMessage, baseUrl: string | undefined): string | null {
+  const att = (m.attachments as any[])?.[0];
+  const raw: string | undefined = att?.srcURL || att?.url;
+  if (!raw || !baseUrl) return null;
+  try { return buildBeeperAssetUrl(normalizeBeeperBaseUrl(baseUrl), raw); } catch { return null; }
+}
 function videoAssetUrl(m: BeeperMessage, baseUrl: string | undefined): string | null {
   const att = (m.attachments || []).find((a: any) => (a.type || "").toLowerCase() === "video" || (a.mimeType || "").startsWith("video"));
   const raw: string | undefined = att?.srcURL || att?.url;
@@ -2188,6 +2200,7 @@ export function GlassesUI({
   const videoMsgIdRef = useRef<string | null>(null);
   // older-history paging (Beeper paginates messages too; up-scroll at the
   // top of the loaded window must fetch older ones instead of dead-ending)
+  const imgMsgIdRef = useRef<string | null>(null);
   const msgCursorRef = useRef<string | null>(null);
   const msgHasMoreRef = useRef<boolean>(false);
   const msgLoadingMoreRef = useRef<boolean>(false);
@@ -4291,6 +4304,26 @@ export function GlassesUI({
     }
   };
 
+  const setupImagePreview = async (bridge: EvenAppBridge, m: BeeperMessage, layout: ReturnType<typeof imgLayoutFor>) => {
+    imgMsgIdRef.current = m.id;
+    const url = imageAssetUrl(m, beeperBaseRef.current);
+    if (!url) return;
+    try {
+      const token = (await getApiConfig())?.token;
+      const res = await fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const bmp = await createImageBitmap(blob);
+      const slices = await renderImageSlices(bmp, layout);
+      for (let i = 0; i < slices.length; i++) {
+        if (imgMsgIdRef.current !== m.id) return; // superseded by a newer focus
+        await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 15 + i, containerName: `img${i}`, imageData: slices[i] }));
+      }
+    } catch (e) {
+      console.warn("[img] preview failed:", String(e).slice(0, 100));
+    }
+  };
+
   const renderMessagesPage = useCallback(
     async (bridge: EvenAppBridge, snapshot: AppState, _nav: GlassNavState) => {
       const chat = snapshot.chats.find((c) => c.id === snapshot.selectedChat);
@@ -4300,6 +4333,9 @@ export function GlassesUI({
       const layout = computeMsgLayout(snapshot.messages, msgBlockRef.current, snapshot.isLoading, focus);
       const items = layout.items;
       const videoFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "VIDEO";
+      const imgFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "IMAGE";
+      const imgAspect = imgFocus ? attachmentAspect(items[0].msg) : 1;
+      const imgLayout = imgFocus ? imgLayoutFor(imgAspect) : null;
       // focused message = full brightness; others one step dimmer; mic dims
       // when a message holds the focus
       const slotIdx = items.map((it) => snapshot.messages.indexOf(it.msg));
@@ -4348,15 +4384,21 @@ export function GlassesUI({
       });
       // stack slots top-down at their natural heights; center time beside bubble
       let y = MSG_AREA_Y;
+      if (imgFocus && imgLayout?.mode === "wide") {
+        // full-width photo: time rides the top strip instead of beside it
+        const s0 = slots[0];
+        if (s0.show) { s0.y = MSG_AREA_Y; s0.timeY = MSG_AREA_Y; }
+      }
       for (const s of slots) {
         if (!s.show) continue;
+        if (imgFocus && imgLayout?.mode === "wide") { y = s.y + s.h + MSG_GAP; continue; }
         s.y = y;
         s.timeY = y + Math.max(0, Math.round((s.h - s.th) / 2));
         y += s.h + MSG_GAP;
       }
       // shape = focus mode + per-slot geometry (page change → rebuild, which is
       // correct: new messages = new content); stable within a page → upgrades
-      const shape = (layout.focus ? "F" : "N") + (videoFocus ? "V" : "") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}:${s.y}` : "x")).join("");
+      const shape = (layout.focus ? "F" : "N") + (videoFocus ? "V" : imgFocus ? "I" + (imgLayout?.mode ?? "") : "") + slots.map((s) => (s.show ? `${s.isMine ? "m" : "i"}${s.h}:${s.y}` : "x")).join("");
       msgTopNameRef.current = chatName;
       // phone typing mirrors live into the glasses input container
       composeMirror = () => {
@@ -4381,7 +4423,7 @@ export function GlassesUI({
 
       const textObject = [
         new TextContainerProperty({ containerID: 1, containerName: "topbar", xPosition: 1, yPosition: 2, width: 574, height: 38, paddingLength: 2, borderWidth: 2, borderColor: 12, borderRadius: 0, content: topbarText, isEventCapture: 0, zOrderIndex: 1 }),
-        mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, slots[0].bubble, slots[0].show ? 1 : 0, slots[0].bright),
+        mk(2, "bub0", slots[0].bx, BUB_W, slots[0].y, slots[0].h, imgFocus ? " " : slots[0].bubble, slots[0].show && !imgFocus ? 1 : 0, slots[0].bright),
         mk(3, "time0", slots[0].tx, TIME_W, slots[0].timeY, slots[0].th, slots[0].time, 0, slots[0].bright === 4 ? 2 : 1),
         mk(4, "bub1", slots[1].bx, BUB_W, slots[1].y, slots[1].h, slots[1].bubble, slots[1].show ? 1 : 0, slots[1].bright),
         mk(5, "time1", slots[1].tx, TIME_W, slots[1].timeY, slots[1].th, slots[1].time, 0, slots[1].bright === 4 ? 2 : 1),
@@ -4392,7 +4434,7 @@ export function GlassesUI({
 
       if (needRebuild) {
         const rb = await bridge.rebuildPageContainer(new RebuildPageContainer({
-          containerTotalNum: videoFocus ? 11 : 10,
+          containerTotalNum: 10 + (videoFocus ? 1 : 0) + (imgLayout ? imgLayout.boxes.length : 0),
           menuObject: new MenuContainerProperty({
             menuItems: [
               new MenuItemProperty({ itemName: "Chats", itemID: MENU_CHATS }),
@@ -4406,6 +4448,7 @@ export function GlassesUI({
             new ImageContainerProperty({ containerID: 8, containerName: "topav", xPosition: 70, yPosition: 4, width: 34, height: 34, zOrderIndex: 8 }),
             new ImageContainerProperty({ containerID: 12, containerName: "mic", xPosition: 540, yPosition: 250, width: 34, height: 34, zOrderIndex: 12 }),
             ...(videoFocus ? [new ImageContainerProperty({ containerID: 14, containerName: "vid", xPosition: 143, yPosition: 46, width: VID_W, height: VID_H, zOrderIndex: 14 })] : []),
+            ...(imgLayout ? imgLayout.boxes.map((b, i) => new ImageContainerProperty({ containerID: 15 + i, containerName: `img${i}`, xPosition: b.x, yPosition: b.y, width: b.w, height: b.h, zOrderIndex: 15 + i })) : []),
           ],
           listObject: [],
         }));
@@ -4421,6 +4464,8 @@ export function GlassesUI({
         } catch (e) { console.warn("[msg] top avatar failed:", e); }
         if (videoFocus) void setupVideoPreview(bridge, items[0].msg);
         else { unloadVideo(); videoLoopingRef.current = false; videoMsgIdRef.current = null; }
+        if (imgFocus && imgLayout) void setupImagePreview(bridge, items[0].msg, imgLayout);
+        else imgMsgIdRef.current = null;
         return;
       }
       // upgrade ONLY containers whose content actually changed — upgrading an
@@ -4450,6 +4495,11 @@ export function GlassesUI({
         unloadVideo();
         videoLoopingRef.current = false;
         videoMsgIdRef.current = null;
+      }
+      if (imgFocus && imgLayout && imgMsgIdRef.current !== items[0].msg.id) {
+        void setupImagePreview(bridge, items[0].msg, imgLayout);
+      } else if (!imgFocus && imgMsgIdRef.current) {
+        imgMsgIdRef.current = null;
       }
     },
     [],
