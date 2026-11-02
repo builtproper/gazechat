@@ -2121,6 +2121,8 @@ export function GlassesUI({
     screen: state.currentScreen,
   });
   const previousScreenRef = useRef<Screen>(state.currentScreen);
+  // cursor position in the chat list when a chat was opened — restored on back
+  const chatListIndexRef = useRef<number>(0);
   const glassesBridgeRef = useRef<EvenAppBridge | null>(null);
   const glassesInitializedRef = useRef<boolean>(false);
   const glassesLayoutRef = useRef<"text" | "chats" | "messages" | null>(null);
@@ -4645,8 +4647,13 @@ export function GlassesUI({
         videoLoopingRef.current = false;
         videoMsgIdRef.current = null;
       }
+      // remember the list cursor when diving into a chat; put it back when
+      // returning (page derives from the index, so the page is restored too)
+      if (previousScreenRef.current === "chats" && state.currentScreen === "messages") {
+        chatListIndexRef.current = navRef.current.highlightedIndex;
+      }
       navRef.current = {
-        highlightedIndex: 0,
+        highlightedIndex: state.currentScreen === "chats" ? chatListIndexRef.current : 0,
         screen: state.currentScreen,
       };
       previousScreenRef.current = state.currentScreen;
