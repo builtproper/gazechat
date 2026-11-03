@@ -715,6 +715,7 @@ const AVH = 54; // cell height: 2px under 2 text lines (bottom alignment, user 3
 // the message type, so we fetch the last message once per chat (cached) and
 // label the preview with Photo/Video/Audio/Voice/File.
 const mediaTypeCache = new Map<string, string>();
+const mediaRawTypeCache = new Map<string, string>(); // chatId -> last msg type (forwarded labels)
 async function getMediaLabel(chat: any, client: any): Promise<string> {
   const hit = mediaTypeCache.get(chat.id);
   if (hit !== undefined) return hit;
@@ -723,6 +724,7 @@ async function getMediaLabel(chat: any, client: any): Promise<string> {
     const res = await client.listMessages(chat.id, { limit: 1 });
     const m = res?.messages?.[0];
     const t = (m?.type || "").toUpperCase();
+    mediaRawTypeCache.set(chat.id, t);
     // no space after the emoji: the firmware skips glyphs it lacks (📷🎬🎵🎤)
     // and the leftover space then showed as a leading blank in the preview
     if (t === "IMAGE") label = "📷Photo";
@@ -747,6 +749,24 @@ async function getMediaLabel(chat: any, client: any): Promise<string> {
   } catch {}
   mediaTypeCache.set(chat.id, label);
   return label;
+}
+// forwarded detection: Beeper previews mark forwards with "↷ Forwarded"
+// (WhatsApp) or "Forwarded message from X" (Matrix/Telegram), followed by the
+// forwarded content — empty for media-only forwards (voice/photo/video/file)
+function fwdInfo(raw: string): { fwd: boolean; rest: string } {
+  const clean = stripUnsupportedChars(raw).replace(/\r/g, "");
+  const m = clean.match(/^\s*(?:\u21B7\s*)?Forwarded(?: message from [^\n]*)?\s*/i);
+  if (!m) return { fwd: false, rest: clean };
+  return { fwd: true, rest: clean.slice(m[0].length).replace(/^>\s*/gm, "").trim() };
+}
+function fwdMediaLabel(t: string): string {
+  if (t === "IMAGE") return "Forwarded image";
+  if (t === "VIDEO") return "Forwarded video";
+  if (t === "VOICE" || t === "AUDIO") return "Forwarded voice message";
+  if (t === "STICKER") return "Forwarded sticker";
+  if (t === "LOCATION") return "Forwarded location";
+  if (t === "TEXT") return "Forwarded message";
+  return "Forwarded attachment";
 }
 
 const avatarCache = new Map<string, string>(); // chatId -> dataURL of composed cell
@@ -4640,10 +4660,17 @@ export function GlassesUI({
       const prevRaw = (c: any) => ((c as any).preview?.text || "") as string;
       // NEVER block the page on a media-label fetch: use preview text or the
       // cache; unknown labels stream in via the background upgrade below
-      const previews = pageChats.map((c) => {
+      const buildPrev = (c: any) => {
         const raw = prevRaw(c);
+        const f = fwdInfo(raw);
+        if (f.fwd) {
+          if (f.rest) return fmtPrev("Forwarded message: " + f.rest.slice(0, 20));
+          const t = mediaRawTypeCache.get(c.id);
+          return t ? fmtPrev(fwdMediaLabel(t)) : "Forwarded";
+        }
         return fmtPrev(raw.trim() ? raw : mediaTypeCache.get(c.id) ?? "");
-      });
+      };
+      const previews = pageChats.map(buildPrev);
       // 2 lines per chat: line1 = name, line2 = preview (blank-pad to 5 rows)
       const nameCol: string[] = [];
       const prevCol: string[] = [];
@@ -4659,14 +4686,16 @@ export function GlassesUI({
       // containers at the same x interleave without overlap (brightness differs)
       const empty = total === 0;
       // media labels for chats without preview text arrive in the background
-      const pending = pageChats.filter((c) => !prevRaw(c).trim() && mediaTypeCache.get(c.id) === undefined);
+      const needsType = (c: any) => {
+        const f = fwdInfo(prevRaw(c));
+        return f.fwd && !f.rest && mediaRawTypeCache.get(c.id) === undefined;
+      };
+      const pending = pageChats.filter((c) =>
+        (needsType(c)) || (!prevRaw(c).trim() && mediaTypeCache.get(c.id) === undefined));
       if (pending.length && client) {
         void Promise.all(pending.map((c) => getMediaLabel(c, client))).then(() => {
           if (chatPageSigRef.current !== pageSig) return; // user moved on
-          const fresh = pageChats.map((c) => {
-            const raw = prevRaw(c);
-            return fmtPrev(raw.trim() ? raw : mediaTypeCache.get(c.id) ?? "");
-          });
+          const fresh = pageChats.map(buildPrev);
           const txt = fresh.map((pv) => `\n${pv}`).join("\n");
           void bridge.textContainerUpgrade(new TextContainerUpgrade({ containerID: 5, containerName: "preview", content: txt, textColor: 1 }));
           // keep the fill's text authoritative until the page actually changes
