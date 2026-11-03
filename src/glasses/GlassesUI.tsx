@@ -726,7 +726,7 @@ async function getMediaLabel(chat: any, client: any): Promise<string> {
   if (hit !== undefined) return hit;
   let label = "";
   try {
-    const res = await client.listMessages(chat.id, { limit: 1 });
+    const res = await scheduleFetch<{ messages: any[]; cursor?: string; hasMore?: boolean }>(FETCH_PRIO.bg, () => client.listMessages(chat.id, { limit: 1 } as any));
     const m = res?.messages?.[0];
     const t = (m?.type || "").toUpperCase();
     mediaRawTypeCache.set(chat.id, t);
@@ -774,7 +774,76 @@ function fwdMediaLabel(t: string): string {
   return "Forwarded attachment";
 }
 
-const avatarCache = new Map<string, string>(); // chatId -> dataURL of composed cell
+// ── gateway fetch scheduler (Gemini Q5-2) ──
+// The gateway serialises at 4 concurrent requests and answers 503 beyond that;
+// bursts (5 avatars + 5 label probes + poll) used to collide. Cap at 3 here so
+// one slot always stays free for user-triggered work. Higher prio jumps ahead.
+const FETCH_PRIO = { user: 0, focus: 1, visible: 2, bg: 3 } as const;
+type FetchPrio = (typeof FETCH_PRIO)[keyof typeof FETCH_PRIO];
+const fetchQueue: Array<{ prio: FetchPrio; seq: number; run: () => Promise<void> }> = [];
+let fetchActive = 0;
+const FETCH_MAX = 3;
+let fetchSeq = 0;
+function fetchPump() {
+  while (fetchActive < FETCH_MAX && fetchQueue.length) {
+    fetchQueue.sort((a, b) => a.prio - b.prio || a.seq - b.seq);
+    const job = fetchQueue.shift()!;
+    fetchActive++;
+    job.run().finally(() => { fetchActive--; fetchPump(); });
+  }
+}
+function scheduleFetch<T>(prio: FetchPrio, work: () => Promise<T>): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    fetchQueue.push({
+      prio,
+      seq: fetchSeq++,
+      run: () => work().then(resolve, reject),
+    });
+    fetchPump();
+  });
+}
+
+const imgSliceCache = new Map<string, number[][]>(); // msgId|mode -> rendered slices
+const IMG_SLICE_MAX = 15;
+const avatarCache = new Map<string, string>(); // chatId|unread|account -> dataURL of composed cell
+// raw avatar bitmaps keyed by the ASSET url (not the chat) — an unread-badge
+// change recomposes from RAM instead of re-downloading the picture (Gemini Q5)
+const rawAvatarCache = new Map<string, ImageBitmap | null>();
+const RAW_AVATAR_MAX = 100;
+function rawAvatarPut(url: string, bmp: ImageBitmap | null) {
+  if (rawAvatarCache.size >= RAW_AVATAR_MAX) {
+    const oldest = rawAvatarCache.keys().next().value as string | undefined;
+    if (oldest !== undefined) {
+      const evicted = rawAvatarCache.get(oldest);
+      try { evicted?.close?.(); } catch { /* ignore */ }
+      rawAvatarCache.delete(oldest);
+    }
+  }
+  rawAvatarCache.set(url, bmp); // Map keeps insertion order → crude LRU
+}
+async function getRawAvatarBitmap(assetUrl: string, token: string | undefined): Promise<ImageBitmap | null> {
+  const hit = rawAvatarCache.get(assetUrl);
+  if (hit !== undefined) return hit;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await scheduleFetch(FETCH_PRIO.visible, () =>
+        fetch(assetUrl, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined));
+      if (res.ok) {
+        const blob = await res.blob();
+        if (blob.size > 0) {
+          const bmp = await createImageBitmap(blob);
+          rawAvatarPut(assetUrl, bmp);
+          return bmp;
+        }
+      }
+    } catch (e) {
+      console.warn("[avatar] attempt", attempt, String(e).slice(0, 80));
+    }
+    if (attempt === 0) await new Promise((r) => setTimeout(r, 350));
+  }
+  rawAvatarPut(assetUrl, null); // negative cache: don't hammer a dead asset
+  return null;
+}
 // chat crawls: only the newest crawl may write state (a poll racing the
 // cold-start crawl used to overwrite the full 75 with its partial 25)
 let chatCrawlSeq = 0;
@@ -862,24 +931,13 @@ async function composeAvatarCell(chat: any, baseUrl: string | undefined): Promis
       const token = (await getApiConfig())?.token;
       // two attempts: the gateway answers 503 when >4 requests are in flight,
       // and a truncated body can fail to decode — both are transient
-      for (let attempt = 0; attempt < 2 && !drew; attempt++) {
-        try {
-          const res = await fetch(assetUrl, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
-          if (res.ok) {
-            const blob = await res.blob();
-            if (blob.size > 0) {
-              const bmp = await createImageBitmap(blob);
-              ctx.save();
-              ctx.beginPath(); ctx.arc(AV / 2, AV / 2, AV / 2 - 7, 0, Math.PI * 2); ctx.clip();
-              ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 7, 7, AV - 14, AV - 14);
-              ctx.restore();
-              drew = true;
-            }
-          }
-        } catch (e) {
-          console.warn("[avatar] attempt", attempt, String(e).slice(0, 80));
-        }
-        if (!drew && attempt === 0) await new Promise((r) => setTimeout(r, 350));
+      const bmp = await getRawAvatarBitmap(assetUrl, token);
+      if (bmp) {
+        ctx.save();
+        ctx.beginPath(); ctx.arc(AV / 2, AV / 2, AV / 2 - 7, 0, Math.PI * 2); ctx.clip();
+        ctx.drawImage(bmp, 0, 0, bmp.width, bmp.height, 7, 7, AV - 14, AV - 14);
+        ctx.restore();
+        drew = true;
       }
     }
   } catch { /* initials fallback below */ }
@@ -4643,9 +4701,11 @@ export function GlassesUI({
     const attempt = async (): Promise<boolean> => {
       try {
         const token = (await getApiConfig())?.token;
-        const res = await fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
-        if (!res.ok) return false;
-        const blob = await res.blob();
+        const blob = await scheduleFetch(FETCH_PRIO.focus, async () => {
+          const res = await fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+          if (!res.ok) throw new Error("asset " + res.status);
+          return res.blob();
+        });
         const { duration } = await loadVideo(URL.createObjectURL(blob));
         videoDurRef.current = duration;
         const png = await posterFrame();
@@ -4672,7 +4732,8 @@ export function GlassesUI({
     if (!url) return;
     try {
       const token = (await getApiConfig())?.token;
-      await loadVoice(url, m.id, token ? { Authorization: `Bearer ${token}` } : undefined, autoplay);
+      await scheduleFetch(FETCH_PRIO.focus, () =>
+        loadVoice(url, m.id, token ? { Authorization: `Bearer ${token}` } : undefined, autoplay));
       setState((st) => ({ ...st })); // re-render: duration appears in the bar
     } catch (e) {
       console.warn("[voice] load failed:", String(e).slice(0, 100));
@@ -4680,16 +4741,32 @@ export function GlassesUI({
   };
 
   const setupImagePreview = async (bridge: EvenAppBridge, m: BeeperMessage, layout: ReturnType<typeof imgLayoutFor>) => {
+    // slices are deterministic per (message, layout mode) — a scroll back to
+    // a photo must not re-download/re-decode/re-slice it (Gemini Q5-3)
+    const sliceKey = `${m.id}|${layout.mode}`;
+    const cached = imgSliceCache.get(sliceKey);
+    if (cached) {
+      imgMsgIdRef.current = m.id;
+      for (let i = 0; i < cached.length; i++) {
+        if (imgMsgIdRef.current !== m.id) return;
+        await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 15 + i, containerName: `img${i}`, imageData: cached[i] }));
+      }
+      return;
+    }
     imgMsgIdRef.current = m.id;
     const url = imageAssetUrl(m, beeperBaseRef.current);
     if (!url) return;
     try {
       const token = (await getApiConfig())?.token;
-      const res = await fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
-      if (!res.ok) return;
-      const blob = await res.blob();
+      const blob = await scheduleFetch(FETCH_PRIO.focus, async () => {
+        const res = await fetch(url, token ? { headers: { Authorization: `Bearer ${token}` } } : undefined);
+        if (!res.ok) throw new Error("asset " + res.status);
+        return res.blob();
+      });
       const bmp = await createImageBitmap(blob);
       const slices = await renderImageSlices(bmp, layout);
+      imgSliceCache.set(sliceKey, slices);
+      if (imgSliceCache.size > IMG_SLICE_MAX) imgSliceCache.delete(imgSliceCache.keys().next().value as string);
       for (let i = 0; i < slices.length; i++) {
         if (imgMsgIdRef.current !== m.id) return; // superseded by a newer focus
         await bridge.updateImageRawData(new ImageRawDataUpdate({ containerID: 15 + i, containerName: `img${i}`, imageData: slices[i] }));
