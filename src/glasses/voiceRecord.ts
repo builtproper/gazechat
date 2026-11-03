@@ -156,6 +156,63 @@ export function pcmToWavBlob(pcm: Uint8Array): Blob {
   return new Blob([wavBuffer], { type: "audio/wav" });
 }
 
+// ── OGG/Opus encoding (WhatsApp voice-note format) ──
+// The wasm encoder + Ogg muxer ship as static files (public/opus/, MIT:
+// opus-encdec). Loaded lazily on the first voice send so app start stays fast.
+declare global { interface Window { OpusEncoderLib?: any; OggOpusEncoder?: any; OPUS_SCRIPT_LOCATION?: string } }
+let opusLoader: Promise<void> | null = null;
+function loadScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = src;
+    el.onload = () => resolve();
+    el.onerror = () => reject(new Error("script failed: " + src));
+    document.head.appendChild(el);
+  });
+}
+async function ensureOpus(): Promise<void> {
+  if (!opusLoader) {
+    opusLoader = (async () => {
+      window.OPUS_SCRIPT_LOCATION = "/opus/"; // wasm fetch base
+      await loadScript("/opus/libopus-encoder.wasm.min.js");
+      await loadScript("/opus/oggOpusEncoder.js");
+      const lib = window.OpusEncoderLib;
+      if (!lib) throw new Error("OpusEncoderLib missing");
+      if (!lib.isReady) await new Promise<void>((res) => { lib.onready = () => res(); });
+    })().catch((e) => { opusLoader = null; throw e; });
+  }
+  return opusLoader;
+}
+
+/** int16-LE mono PCM (16 kHz) → OGG/Opus voice-note blob (24 kbps VoIP). */
+export async function pcmToOggOpusBlob(pcm: Uint8Array): Promise<Blob> {
+  await ensureOpus();
+  const enc = new window.OggOpusEncoder({
+    encoderApplication: 2048, // VoIP — what WhatsApp uses for voice notes
+    encoderSampleRate: 48000,
+    originalSampleRate: PCM_SAMPLE_RATE,
+    numberOfChannels: 1,
+    encoderFrameSize: 20,
+    maxFramesPerPage: 40,
+    encoderBitRate: 24000,
+    resampleQuality: 6,
+  }, window.OpusEncoderLib);
+  const pages: Uint8Array[] = [];
+  const push = (p: any) => { if (p?.page) pages.push(p.page); };
+  push(enc.generateIdPage());
+  push(enc.generateCommentPage());
+  const f32 = new Float32Array(pcm.length / 2);
+  const view = new DataView(pcm.buffer, pcm.byteOffset, pcm.byteLength);
+  for (let i = 0; i < f32.length; i++) f32[i] = view.getInt16(i * 2, true) / 32768;
+  const CH = 4800; // 0.3 s slices keep memory flat
+  for (let off = 0; off < f32.length; off += CH) {
+    const part = f32.subarray(off, off + CH);
+    (enc.encode([part]) || []).forEach(push);
+  }
+  (enc.encodeFinalFrame() || []).forEach(push);
+  return new Blob(pages as BlobPart[], { type: "audio/ogg; codecs=opus" });
+}
+
 export function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
     const r = new FileReader();

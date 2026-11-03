@@ -17,6 +17,7 @@
     "@evenrealities/even_hub_sdk": "0.0.16",
     "@jappyjan/even-better-sdk": "0.0.11",
     "even-toolkit": "^0.5.2",
+    "opus-encdec": "^0.1.1",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router": "^7.13.1",
@@ -24,6 +25,7 @@
     "zustand": "^4.4.0"
   },
   "devDependencies": {
+    "@evenrealities/evenhub-cli": "0.1.13",
     "@types/react": "^18.2.0",
     "@types/react-dom": "^18.2.0",
     "@typescript-eslint/eslint-plugin": "^6.0.0",
@@ -32,7 +34,6 @@
     "eslint": "^8.45.0",
     "eslint-plugin-react-hooks": "^4.6.0",
     "typescript": "^5.0.0",
-    "vite": "^4.4.0",
-    "@evenrealities/evenhub-cli": "0.1.13"
+    "vite": "^4.4.0"
   }
 }

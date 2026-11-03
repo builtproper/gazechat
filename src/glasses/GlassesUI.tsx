@@ -59,7 +59,7 @@ import {
 import {
   recGetState, recSetState, recStart, recHalt, recReset, recAddChunk,
   recSeconds, recBarLine, recMergePcm, recHasAudio, fmtMMSS,
-  blobToBase64,
+  blobToBase64, pcmToOggOpusBlob,
 } from "./voiceRecord";
 import { imgLayout as imgLayoutFor, renderImageSlices } from "./imagePreview";
 
@@ -2670,9 +2670,13 @@ export function GlassesUI({
   const recAfterSend = useCallback(() => {
     recReset();
     recTranscript = "";
+    const backup = recComposeBackup;
     recComposeBackup = "";
+    composeText = backup;
+    inputHintGone = false; // placeholder ("Type on your phone…") is allowed again
     msgFocusRef.current = -1;
     msgBlockRef.current = 0;
+    recRefreshInput(); // unconditional: the page rebuild may early-return
     setState((st) => ({ ...st }));
   }, []);
 
@@ -2690,12 +2694,14 @@ export function GlassesUI({
     if (!chat) return;
     try {
       const pcm = recMergePcm();
-      const wav = pcmToWavBlob(pcm);
-      const b64 = await blobToBase64(wav);
-      const uploadID = await beeper.uploadAssetBase64(b64, "voice-message.wav", "audio/wav");
+      // WhatsApp voice notes MUST be OGG/Opus (wav → "unsupported media
+      // type" on the bridge, Joel 03.11.)
+      const ogg = await pcmToOggOpusBlob(pcm);
+      const b64 = await blobToBase64(ogg);
+      const uploadID = await beeper.uploadAssetBase64(b64, "voice-message.ogg", "audio/ogg; codecs=opus");
       await beeper.sendAttachment(chat, {
-        uploadID, type: "voice-note", mimeType: "audio/wav",
-        fileName: "voice-message.wav", duration: recSeconds(),
+        uploadID, type: "voice-note", mimeType: "audio/ogg; codecs=opus",
+        fileName: "voice-message.ogg", duration: recSeconds(),
       });
       // same post-send housekeeping as text sends
       suppressReloadRef.current = true;
@@ -2703,14 +2709,12 @@ export function GlassesUI({
       suppressReloadTimeoutRef.current = setTimeout(() => { suppressReloadRef.current = false; suppressReloadTimeoutRef.current = null; }, 2000);
       void _beeperForDraft?.updateDraft(chat, null).catch(() => {});
       draftSaved = "";
-      if (composeText) { recComposeBackup = composeText; } // keep typed text
-      else recComposeBackup = "";
       recAfterSend();
-      if (recComposeBackup) { composeText = recComposeBackup; recRefreshInput(); }
       void loadMessages(chat);
     } catch (e) {
       console.warn("[rec] voice send failed:", String(e).slice(0, 120));
       recSetState("choose");
+      recOption = 0;
       recRefreshInput();
     }
   }, [beeper, loadMessages, recAfterSend]);
@@ -2722,6 +2726,8 @@ export function GlassesUI({
     recReset();
     recTranscript = "";
     composeText = recComposeBackup; // restore whatever was typed before recording
+    recComposeBackup = "";
+    inputHintGone = false;
     recRefreshInput();
     setState((st) => ({ ...st }));
   }, [recCloseMic]);
