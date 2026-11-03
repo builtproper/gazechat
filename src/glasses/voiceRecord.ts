@@ -15,7 +15,6 @@
 export type RecState = "idle" | "recording" | "choose" | "transcribing" | "review" | "sending";
 
 const PCM_SAMPLE_RATE = 16000;
-const PCM_BITS_PER_SAMPLE = 16;
 const BAR_GLYPHS = "\u2581\u2582\u2583\u2584\u2585\u2586\u2587\u2588"; // ▁▂▃▄▅▆▇█
 
 let state: RecState = "idle";
@@ -127,33 +126,6 @@ export function recMergePcm(): Uint8Array {
   let off = 0;
   for (const c of chunks) { merged.set(c, off); off += c.length; }
   return merged;
-}
-
-function writeAscii(view: DataView, offset: number, value: string): void {
-  for (let i = 0; i < value.length; i += 1) view.setUint8(offset + i, value.charCodeAt(i));
-}
-
-/** WAV container (ASR already uses this path). */
-export function pcmToWavBlob(pcm: Uint8Array): Blob {
-  const headerLength = 44;
-  const wavBuffer = new ArrayBuffer(headerLength + pcm.length);
-  const view = new DataView(wavBuffer);
-  const byteRate = PCM_SAMPLE_RATE * 1 * (PCM_BITS_PER_SAMPLE / 8);
-  writeAscii(view, 0, "RIFF");
-  view.setUint32(4, 36 + pcm.length, true);
-  writeAscii(view, 8, "WAVE");
-  writeAscii(view, 12, "fmt ");
-  view.setUint32(16, 16, true);
-  view.setUint16(20, 1, true);
-  view.setUint16(22, 1, true);
-  view.setUint32(24, PCM_SAMPLE_RATE, true);
-  view.setUint32(28, byteRate, true);
-  view.setUint16(32, 2, true);
-  view.setUint16(34, PCM_BITS_PER_SAMPLE, true);
-  writeAscii(view, 36, "data");
-  view.setUint32(40, pcm.length, true);
-  new Uint8Array(wavBuffer, headerLength).set(pcm);
-  return new Blob([wavBuffer], { type: "audio/wav" });
 }
 
 // ── OGG/Opus encoding (WhatsApp voice-note format) ──
