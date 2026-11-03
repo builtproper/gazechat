@@ -4076,10 +4076,15 @@ export function GlassesUI({
           if (snapshot.currentScreen === "messages") {
             const msgs = snapshot.messages;
             const fi = Math.min(msgFocusRef.current, msgs.length - 1);
-            const fm = fi >= 0 ? msgs[fi] : null;
+            // mic focus but the newest message owns the page (voice/video/img/
+            // tall text) → THAT message is what's on screen (layout override)
+            const eff = fi < 0 && msgs.length && (ownsPage(msgs[msgs.length - 1], msgs) || isVoiceMsg(msgs[msgs.length - 1]))
+              ? msgs.length - 1
+              : fi;
+            const fm = eff >= 0 ? msgs[eff] : null;
             if (fm && isVoiceMsg(fm)) {
-              void setupVoicePreview(fm); // no-op if already loaded
-              toggleVoice();
+              if (voiceMsgId() === fm.id) toggleVoice();
+              else void setupVoicePreview(fm, true); // tap during fetch → autoplay on ready
               setState((st) => ({ ...st }));
             }
             if (fm && (fm.type || "").toUpperCase() === "VIDEO" && videoMsgIdRef.current === fm.id) {
@@ -4376,13 +4381,13 @@ export function GlassesUI({
     }
   };
 
-  const setupVoicePreview = async (m: BeeperMessage) => {
+  const setupVoicePreview = async (m: BeeperMessage, autoplay = false) => {
     if (voiceMsgId() === m.id) return; // already loaded for this message
     const url = voiceAssetUrl(m, beeperBaseRef.current);
     if (!url) return;
     try {
       const token = (await getApiConfig())?.token;
-      await loadVoice(url, m.id, token ? { Authorization: `Bearer ${token}` } : undefined);
+      await loadVoice(url, m.id, token ? { Authorization: `Bearer ${token}` } : undefined, autoplay);
       setState((st) => ({ ...st })); // re-render: duration appears in the bar
     } catch (e) {
       console.warn("[voice] load failed:", String(e).slice(0, 100));
@@ -4419,7 +4424,11 @@ export function GlassesUI({
       const items = layout.items;
       const videoFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "VIDEO";
       const imgFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "IMAGE";
-      const voiceFocus = !!items[0] && isVoiceMsg(items[0].msg);
+      const newest = snapshot.messages[snapshot.messages.length - 1];
+      const voiceMsg = (focus >= 0 && isVoiceMsg(snapshot.messages[focus]))
+        ? snapshot.messages[focus]
+        : (focus < 0 && newest && isVoiceMsg(newest) ? newest
+          : (!!items[0] && isVoiceMsg(items[0].msg) ? items[0].msg : null));
       // focused message = full brightness; others one step dimmer; mic dims
       // when a message holds the focus
       const slotIdx = items.map((it) => snapshot.messages.indexOf(it.msg));
@@ -4551,7 +4560,7 @@ export function GlassesUI({
         else { unloadVideo(); videoLoopingRef.current = false; videoMsgIdRef.current = null; }
         if (imgFocus && imgLayout) void setupImagePreview(bridge, items[0].msg, imgLayout);
         else imgMsgIdRef.current = null;
-        if (voiceFocus) void setupVoicePreview(items[0].msg);
+        if (voiceMsg) void setupVoicePreview(voiceMsg);
         return;
       }
       // upgrade ONLY containers whose content actually changed — upgrading an
@@ -4584,7 +4593,7 @@ export function GlassesUI({
         videoLoopingRef.current = false;
         videoMsgIdRef.current = null;
       }
-      if (voiceFocus) void setupVoicePreview(items[0].msg);
+      if (voiceMsg) void setupVoicePreview(voiceMsg);
       else if (voiceMsgId()) stopVoice(); // focus left the note → pause (keep loaded)
       if (imgFocus && imgLayout && imgMsgIdRef.current !== items[0].msg.id) {
         void setupImagePreview(bridge, items[0].msg, imgLayout);

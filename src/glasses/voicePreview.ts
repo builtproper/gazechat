@@ -20,6 +20,7 @@ let playing = false;
 let ended = false;
 let speed = 1;
 let ready = false;
+let pendingPlay = false;
 
 export function voiceDur() { return dur; }
 export function voicePos() { return audio?.currentTime || 0; }
@@ -36,9 +37,10 @@ export function setVoiceSpeed(s: number) {
 
 /** Fetch the voice note (caller resolves the authed asset URL), load it
  *  hidden, wait for metadata. Returns false if superseded or failed. */
-export async function loadVoice(url: string, id: string, headers?: Record<string, string>): Promise<boolean> {
+export async function loadVoice(url: string, id: string, headers?: Record<string, string>, autoplay = false): Promise<boolean> {
   unloadVoice();
   msgId = id;
+  pendingPlay = autoplay;
   try {
     const res = await fetch(url, headers ? { headers } : undefined);
     if (!res.ok) return false;
@@ -51,6 +53,7 @@ export async function loadVoice(url: string, id: string, headers?: Record<string
     a.addEventListener("loadedmetadata", () => {
       dur = isFinite(a.duration) ? a.duration : 0;
       ready = true;
+      if (pendingPlay) { pendingPlay = false; void doPlay(); }
     });
     a.addEventListener("play", () => { playing = true; });
     a.addEventListener("pause", () => { if (!ended) playing = false; });
@@ -59,27 +62,41 @@ export async function loadVoice(url: string, id: string, headers?: Record<string
     audio = a;
     // metadata may already be there (cached blob)
     if (a.readyState >= 1) { dur = isFinite(a.duration) ? a.duration : 0; ready = true; }
+    if (pendingPlay && ready) { pendingPlay = false; void doPlay(); }
     return true;
-  } catch {
+  } catch (e) {
+    console.warn("[voice] load failed:", String(e).slice(0, 140));
     return false;
   }
 }
 
-/** Tap handler: play / pause / restart-after-end. Returns the new state. */
-export function toggleVoice(): "play" | "pause" | "restart" | "none" {
-  if (!audio || !ready) return "none";
+function doPlay() {
+  if (!audio) return;
+  audio.playbackRate = speed;
+  audio.play().then(
+    () => console.log("[voice] playing, dur=" + dur.toFixed(1) + "s rate=" + speed),
+    (e) => console.warn("[voice] play rejected:", String(e).slice(0, 160)),
+  );
+}
+
+/** Tap handler: play / pause / restart-after-end. A tap before the note is
+ *  loaded queues playback for when metadata arrives. */
+export function toggleVoice(): "play" | "pause" | "restart" | "pending" | "none" {
+  if (!audio) return "none";
+  if (!ready) { pendingPlay = true; return "pending"; }
   if (ended) {
     audio.currentTime = 0;
     ended = false;
-    void audio.play().catch(() => {});
+    void doPlay();
     return "restart";
   }
-  if (audio.paused) void audio.play().catch(() => {});
+  if (audio.paused) void doPlay();
   else audio.pause();
   return playing ? "pause" : "play";
 }
 
 export function stopVoice() {
+  pendingPlay = false;
   if (audio) { try { audio.pause(); } catch { /* ignore */ } }
   playing = false;
   ended = false;
