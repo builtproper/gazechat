@@ -157,32 +157,44 @@ export function pcmToWavBlob(pcm: Uint8Array): Blob {
 }
 
 // ── OGG/Opus encoding (WhatsApp voice-note format) ──
-// Bundled via Vite (dynamic import → separate lazy chunk, wasm asset URL
-// resolved by the bundler — no runtime path guessing). MIT: opus-encdec.
-let opusLoader: Promise<{ lib: any; OggOpusEncoder: any }> | null = null;
-async function ensureOpus(): Promise<{ lib: any; OggOpusEncoder: any }> {
+// The wasm glue is UMD; importing it through Vite's CJS interop hides the
+// browser globals (OPUS_SCRIPT_LOCATION never seen → wasm 404 → "sync
+// fetching failed", Joel 03.11.). Plain <script> tags keep `root === window`
+// and the documented global export path. Files ship in public/opus/ (MIT:
+// opus-encdec), loaded lazily on the first voice send.
+declare global { interface Window { OpusEncoderLib?: any; OPUS_SCRIPT_LOCATION?: string } }
+let opusLoader: Promise<void> | null = null;
+function loadScript(src: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const el = document.createElement("script");
+    el.src = src;
+    el.onload = () => resolve();
+    el.onerror = () => reject(new Error("script failed: " + src));
+    document.head.appendChild(el);
+  });
+}
+async function ensureOpus(): Promise<void> {
   if (!opusLoader) {
     opusLoader = (async () => {
-      // the glue reads this at module-init → must be set BEFORE the import
-      (window as any).OPUS_SCRIPT_LOCATION = "/opus/";
-      // @ts-ignore — untyped wasm glue from opus-encdec
-      const libMod = await import("opus-encdec/dist/libopus-encoder.wasm.js");
-      // @ts-ignore
-      const oggMod = await import("opus-encdec/src/oggOpusEncoder.js");
-      const lib = (libMod.default ?? libMod) as any;
-      const OggOpusEncoder = (oggMod.OggOpusEncoder ?? oggMod.default?.OggOpusEncoder ?? oggMod.default) as any;
-      if (!lib || typeof lib._opus_encoder_create !== "function") throw new Error("OpusEncoderLib missing");
+      window.OPUS_SCRIPT_LOCATION = "/opus/"; // read at glue module-init
+      await loadScript("/opus/libopus-encoder.wasm.min.js");
+      await loadScript("/opus/oggOpusEncoder.js"); // classic script → window.OggOpusEncoder
+      const lib = window.OpusEncoderLib;
+      if (!lib) throw new Error("OpusEncoderLib missing after script load");
       if (!lib.isReady) await new Promise<void>((res) => { lib.onready = () => res(); });
-      if (!OggOpusEncoder) throw new Error("OggOpusEncoder missing");
-      return { lib, OggOpusEncoder };
+      console.log("[rec] opus encoder ready");
     })().catch((e) => { opusLoader = null; throw e; });
   }
   return opusLoader;
 }
 
 /** int16-LE mono PCM (16 kHz) → OGG/Opus voice-note blob (16 kHz wideband, 32 kbps). */
+declare global { interface Window { OggOpusEncoder?: any } }
 export async function pcmToOggOpusBlob(pcm: Uint8Array): Promise<Blob> {
-  const { lib, OggOpusEncoder } = await ensureOpus();
+  await ensureOpus();
+  const lib = window.OpusEncoderLib as any;
+  const OggOpusEncoder = window.OggOpusEncoder as any;
+  if (!OggOpusEncoder) throw new Error("OggOpusEncoder missing");
   const enc = new OggOpusEncoder({
     encoderApplication: 2048, // VoIP — what WhatsApp uses for voice notes
     // encode natively at the mic's 16 kHz (wideband): no pointless up-resample

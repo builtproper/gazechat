@@ -1307,6 +1307,14 @@ function beeperRefForDraft() { return _beeperForDraft; }
 // ── recorder UI state (Joel 03.11.) ──
 // choose/review option: 0 = first line, 1 = second (scroll toggles)
 let recOption = 0;
+let recError = "";
+let recErrorTimer: ReturnType<typeof setTimeout> | null = null;
+function recShowError(msg: string) {
+  recError = msg;
+  recRefreshInput();
+  if (recErrorTimer) clearTimeout(recErrorTimer);
+  recErrorTimer = setTimeout(() => { recError = ""; recRefreshInput(); }, 4000);
+}
 let recComposeBackup = "";
 let recTranscript = "";
 
@@ -1314,6 +1322,7 @@ function recActive() { return recGetState() !== "idle"; }
 
 /** Input-container text for the current recorder state (null = normal). */
 function recInputLine(): string | null {
+  if (recError) return recError;
   switch (recGetState()) {
     case "recording": return recBarLine(22); // 22×20px + MM:SS ≈ 496px < 530 field
     case "choose":
@@ -2632,7 +2641,7 @@ export function GlassesUI({
       await recCloseMic();
       recReset();
       composeText = recComposeBackup;
-      recRefreshInput();
+      recShowError("Mic unavailable");
     }
   }, [recCloseMic]);
 
@@ -2685,7 +2694,7 @@ export function GlassesUI({
     if (!text || text === "(no speech detected)") return;
     const ok = await sendMessage(text);
     if (ok) recAfterSend();
-    else { recSetState("review"); recRefreshInput(); }
+    else { recSetState("review"); recShowError("Send failed"); }
   }, [sendMessage, recAfterSend]);
 
   const recSendVoice = useCallback(async () => {
@@ -2712,10 +2721,11 @@ export function GlassesUI({
       recAfterSend();
       void loadMessages(chat);
     } catch (e) {
-      console.warn("[rec] voice send failed:", String(e).slice(0, 120));
+      const why = String(e).replace(/^Error:\s*/, "").slice(0, 60);
+      console.warn("[rec] voice send failed:", why);
       recSetState("choose");
       recOption = 0;
-      recRefreshInput();
+      recShowError("Send failed: " + why);
     }
   }, [beeper, loadMessages, recAfterSend]);
 
