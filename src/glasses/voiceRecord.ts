@@ -12,7 +12,7 @@
  * encoding needed for upload + ASR.
  */
 
-export type RecState = "idle" | "recording" | "choose" | "transcribing" | "review";
+export type RecState = "idle" | "recording" | "choose" | "transcribing" | "review" | "sending";
 
 const PCM_SAMPLE_RATE = 16000;
 const PCM_BITS_PER_SAMPLE = 16;
@@ -177,7 +177,6 @@ async function fetchText(url: string): Promise<string> {
 async function ensureOpus(): Promise<void> {
   if (!opusLoader) {
     opusLoader = (async () => {
-      window.OPUS_SCRIPT_LOCATION = "/opus/"; // fallback if wasmBinary is ignored
       const [glueSrc, muxerSrc, wasmBytes] = await Promise.all([
         fetchText("/opus/libopus-encoder.wasm.min.js"),
         fetchText("/opus/oggOpusEncoder.js"),
@@ -186,23 +185,34 @@ async function ensureOpus(): Promise<void> {
           return r.arrayBuffer();
         }).then((b) => new Uint8Array(b)),
       ]);
-      // Emscripten reads a pre-existing global `Module` and honours
-      // Module.wasmBinary → the glue performs NO fetch of its own (the
-      // WebView aborted on its relative-path resolution)
-      (window as any).Module = { wasmBinary: wasmBytes };
+      // The Emscripten glue declares `var Module={}` INSIDE its UMD factory,
+      // so a global window.Module is shadowed and never seen (and
+      // document.currentScript is null inside new Function → its own wasm
+      // fetch fails → "sync fetching of the wasm failed"). Fix: hand the wasm
+      // bytes to that exact local object by rewriting the declaration, and
+      // only clean up AFTER the async instantiation finished.
+      const mod: any = { wasmBinary: wasmBytes };
+      (window as any).__OPUS_MOD__ = mod;
+      const patched = glueSrc.replace("var Module={};", "var Module=window.__OPUS_MOD__;");
+      if (patched === glueSrc) throw new Error("opus glue patch point not found");
       let muxer: any;
       try {
         muxer = new Function("module", "exports", "define",
-          glueSrc + "\n" + muxerSrc + "\nreturn typeof OggOpusEncoder !== 'undefined' ? OggOpusEncoder : undefined;"
+          patched + "\n" + muxerSrc + "\nreturn typeof OggOpusEncoder !== 'undefined' ? OggOpusEncoder : undefined;"
         )(undefined, undefined, undefined);
+        const lib = window.OpusEncoderLib;
+        if (!lib) throw new Error("OpusEncoderLib missing (glue export failed)");
+        if (!muxer) throw new Error("OggOpusEncoder missing (muxer export failed)");
+        window.OggOpusEncoder = muxer;
+        if (!lib.isReady) {
+          await new Promise<void>((res, rej) => {
+            const t = setTimeout(() => rej(new Error("Opus init timeout (5s)")), 5000);
+            lib.onready = () => { clearTimeout(t); res(); };
+          });
+        }
       } finally {
-        delete (window as any).Module; // don't leak into other wasm modules
+        delete (window as any).__OPUS_MOD__;
       }
-      const lib = window.OpusEncoderLib;
-      if (!lib) throw new Error("OpusEncoderLib missing (glue export failed)");
-      if (!muxer) throw new Error("OggOpusEncoder missing (muxer export failed)");
-      window.OggOpusEncoder = muxer;
-      if (!lib.isReady) await new Promise<void>((res) => { lib.onready = () => res(); });
       console.log("[rec] opus encoder ready");
     })().catch((e) => { opusLoader = null; throw e; });
   }
@@ -229,7 +239,11 @@ export async function pcmToOggOpusBlob(pcm: Uint8Array): Promise<Blob> {
     resampleQuality: 6,
   }, lib);
   const pages: Uint8Array[] = [];
-  const push = (p: any) => { if (p?.page) pages.push(p.page); };
+  // copy each page: the muxer reuses its internal segment buffer
+  const push = (p: any) => {
+    const buf = p?.page ?? p;
+    if (buf instanceof Uint8Array && buf.byteLength > 0) pages.push(new Uint8Array(buf));
+  };
   push(enc.generateIdPage());
   push(enc.generateCommentPage());
   const f32 = new Float32Array(pcm.length / 2);
@@ -241,7 +255,9 @@ export async function pcmToOggOpusBlob(pcm: Uint8Array): Promise<Blob> {
     (enc.encode([part]) || []).forEach(push);
   }
   (enc.encodeFinalFrame() || []).forEach(push);
-  return new Blob(pages as BlobPart[], { type: "audio/ogg; codecs=opus" });
+  const blob = new Blob(pages as BlobPart[], { type: "audio/ogg; codecs=opus" });
+  if (blob.size < 64) throw new Error(`encoded OGG empty (${blob.size} B)`);
+  return blob;
 }
 
 export function blobToBase64(blob: Blob): Promise<string> {

@@ -1330,6 +1330,7 @@ function recInputLine(): string | null {
         ? `Tap to send as voice message (${fmtMMSS(recSeconds())}) or \u2193`
         : "Tap to transcribe or \u2191";
     case "transcribing": return "Transcribing...";
+    case "sending": return "Sending voice message...";
     case "review":
       return recOption === 0
         ? "Tap to send transcribed text or \u2193"
@@ -2699,8 +2700,11 @@ export function GlassesUI({
 
   const recSendVoice = useCallback(async () => {
     if (!recHasAudio() || !beeper) return;
+    if (recGetState() === "sending") return; // double-tap guard
     const chat = stateRef.current.selectedChat;
     if (!chat) return;
+    recSetState("sending");
+    recRefreshInput();
     try {
       const pcm = recMergePcm();
       // WhatsApp voice notes MUST be OGG/Opus (wav → "unsupported media
@@ -4183,7 +4187,7 @@ export function GlassesUI({
             if (messages.length === 0) return nav;
             const rs = recGetState();
             // capture/transcription in progress: gestures are inert
-            if (rs === "recording" || rs === "transcribing") return nav;
+            if (rs === "recording" || rs === "transcribing" || rs === "sending") return nav;
             // recorder choice screens: scroll toggles the two options
             if (rs === "choose" || rs === "review") {
               recOption = recOption === 0 ? 1 : 0;
@@ -4322,6 +4326,7 @@ export function GlassesUI({
               const rs = recGetState();
               const f = recFnRef.current;
               if (!f) return nav;
+              if (rs === "sending") return nav; // re-entrancy guard
               if (rs === "idle") void f.begin();
               else if (rs === "recording") void f.finish();
               else if (rs === "choose") {
