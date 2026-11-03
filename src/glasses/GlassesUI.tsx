@@ -4076,13 +4076,15 @@ export function GlassesUI({
           if (snapshot.currentScreen === "messages") {
             const msgs = snapshot.messages;
             const fi = Math.min(msgFocusRef.current, msgs.length - 1);
-            // mic focus but the newest message owns the page (voice/video/img/
-            // tall text) → THAT message is what's on screen (layout override)
-            const eff = fi < 0 && msgs.length && (ownsPage(msgs[msgs.length - 1], msgs) || isVoiceMsg(msgs[msgs.length - 1]))
+            // mic focus but the newest message owns the page (video/img/tall
+            // text) → THAT message is what's on screen (layout override)
+            const eff = fi < 0 && msgs.length && ownsPage(msgs[msgs.length - 1], msgs)
               ? msgs.length - 1
               : fi;
             const fm = eff >= 0 ? msgs[eff] : null;
-            if (fm && isVoiceMsg(fm)) {
+            // voice: play/pause ONLY when the note itself holds the focus
+            // (mic focus must NOT start playback — Joel 03.11.)
+            if (fi >= 0 && fm && isVoiceMsg(fm)) {
               if (voiceMsgId() === fm.id) toggleVoice();
               else void setupVoicePreview(fm, true); // tap during fetch → autoplay on ready
               setState((st) => ({ ...st }));
@@ -4530,11 +4532,11 @@ export function GlassesUI({
           containerTotalNum: (layout.focus ? 6 : 10) + (videoFocus ? 1 : 0) + (imgLayout ? imgLayout.boxes.length : 0),
           menuObject: new MenuContainerProperty({
             menuItems: [
+              new MenuItemProperty({ itemName: `Playback-Speed: ${speedRef.current.toFixed(1)}`, itemID: MENU_SPEED }),
               new MenuItemProperty({ itemName: "Chats", itemID: MENU_CHATS }),
               new MenuItemProperty({ itemName: "Low-Priority Chats", itemID: MENU_LOW_PRIORITY }),
               new MenuItemProperty({ itemName: "Archived Chats", itemID: MENU_ARCHIVED }),
               new MenuItemProperty({ itemName: audioOnRef.current ? "Preview-audio: on" : "Preview-Audio: off", itemID: MENU_AUDIO }),
-              new MenuItemProperty({ itemName: `Playback-Speed: ${speedRef.current.toFixed(1)}`, itemID: MENU_SPEED }),
             ],
           }),
           textObject,
