@@ -157,45 +157,38 @@ export function pcmToWavBlob(pcm: Uint8Array): Blob {
 }
 
 // ── OGG/Opus encoding (WhatsApp voice-note format) ──
-// The wasm glue is UMD; importing it through Vite's CJS interop hides the
-// browser globals (OPUS_SCRIPT_LOCATION never seen → wasm 404 → "sync
-// fetching failed", Joel 03.11.). Plain <script> tags keep `root === window`
-// and the documented global export path. Files ship in public/opus/ (MIT:
-// opus-encdec), loaded lazily on the first voice send.
-declare global { interface Window { OpusEncoderLib?: any; OPUS_SCRIPT_LOCATION?: string } }
+// The wasm glue is UMD; both script-tag and Vite-import loading failed to
+// land its export on window inside the Even WebView (Joel 03.11.). So:
+// fetch the sources as TEXT and run them through new Function with
+// module/exports/define shadowed as LOCAL params — the UMD then takes its
+// documented browser branch (root = window → window.OpusEncoderLib), and
+// the muxer's top-level `var OggOpusEncoder` is captured via the return.
+// The glue fetches its .wasm via window.OPUS_SCRIPT_LOCATION (set before).
+// Files live in public/opus/ (MIT: opus-encdec).
+declare global { interface Window { OpusEncoderLib?: any; OggOpusEncoder?: any; OPUS_SCRIPT_LOCATION?: string } }
 let opusLoader: Promise<void> | null = null;
-function loadScript(src: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const el = document.createElement("script");
-    el.src = src;
-    el.onload = () => resolve();
-    el.onerror = () => reject(new Error("script failed: " + src));
-    document.head.appendChild(el);
-  });
+async function fetchText(url: string): Promise<string> {
+  const r = await fetch(url);
+  if (!r.ok) throw new Error("fetch failed: " + url + " (" + r.status + ")");
+  const t = await r.text();
+  if (t.trimStart().startsWith("<")) throw new Error("server returned HTML for " + url);
+  return t;
 }
 async function ensureOpus(): Promise<void> {
   if (!opusLoader) {
     opusLoader = (async () => {
-      window.OPUS_SCRIPT_LOCATION = "/opus/"; // read at glue module-init
-      // The UMD glue exports to `module.exports` when a `module` global exists
-      // (Flutter WebViews often define one) → window.OpusEncoderLib would stay
-      // empty. Hide it during load to force the browser-global branch.
-      const w = window as any;
-      const savedModule = w.module, savedExports = w.exports;
-      try {
-        w.module = undefined; w.exports = undefined; w.define = undefined;
-        await loadScript("/opus/libopus-encoder.wasm.min.js?v=2");
-        await loadScript("/opus/oggOpusEncoder.js?v=2"); // classic script → window.OggOpusEncoder
-      } finally {
-        w.module = savedModule; w.exports = savedExports;
-      }
-      if (!window.OggOpusEncoder) {
-        // oggOpusEncoder.js declares a top-level var → global in classic
-        // scripts; if the environment shadowed it, pull it from the module
-        throw new Error("OggOpusEncoder missing after script load");
-      }
+      window.OPUS_SCRIPT_LOCATION = "/opus/"; // read by the glue at init
+      const [glueSrc, muxerSrc] = await Promise.all([
+        fetchText("/opus/libopus-encoder.wasm.min.js"),
+        fetchText("/opus/oggOpusEncoder.js"),
+      ]);
+      const muxer = new Function("module", "exports", "define",
+        glueSrc + "\n" + muxerSrc + "\nreturn typeof OggOpusEncoder !== 'undefined' ? OggOpusEncoder : undefined;"
+      )(undefined, undefined, undefined);
       const lib = window.OpusEncoderLib;
-      if (!lib) throw new Error("OpusEncoderLib missing after script load");
+      if (!lib) throw new Error("OpusEncoderLib missing (glue export failed)");
+      if (!muxer) throw new Error("OggOpusEncoder missing (muxer export failed)");
+      window.OggOpusEncoder = muxer;
       if (!lib.isReady) await new Promise<void>((res) => { lib.onready = () => res(); });
       console.log("[rec] opus encoder ready");
     })().catch((e) => { opusLoader = null; throw e; });
