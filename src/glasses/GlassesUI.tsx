@@ -4282,9 +4282,20 @@ export function GlassesUI({
           if (action.direction === "up" && nav.highlightedIndex === 0 && pendingChatsRef.current) {
             const pend = pendingChatsRef.current;
             pendingChatsRef.current = null;
-            chatCursorRef.current = pend.cursor;
-            chatHasMoreRef.current = pend.hasMore;
-            setState((st) => ({ ...st, chats: pend.chats }));
+            // cursor rule: the poll only knows page 1 — adopt its cursor
+            // only when nothing deeper was loaded yet, else load-more would
+            // re-fetch pages that are already in the list
+            if (snapshot.chats.length <= pend.chats.length) {
+              chatCursorRef.current = pend.cursor;
+              chatHasMoreRef.current = pend.hasMore;
+            }
+            setState((st) => {
+              const freshIds = new Set(pend.chats.map((c: { id: string }) => c.id));
+              // fresh top page first, then previously loaded chats that the
+              // poll did not cover (order within them is stale but stable)
+              const rest = st.chats.filter((c: { id: string }) => !freshIds.has(c.id));
+              return { ...st, chats: [...pend.chats, ...rest] };
+            });
             chatPageSigRef.current = ""; // force list rebuild with fresh data
             return nav;
           }
@@ -4729,13 +4740,15 @@ export function GlassesUI({
         const tstr = formatTime(it.msg.timestamp);
         const head = tag ? `${tag} ${tstr}` : tstr;
         const focused = focus === slotIdx[i];
-        // the focus space rides the fit-check so it can NEVER cause a wrap:
-        // one line if head+marker+space fits, else marker drops below, else
-        // the old two-line stack (very wide TT.MM.JJ tags)
+        // focus marker = trailing space (firmware ignores textColor on
+        // identical content). Its 6px are ALWAYS reserved in the fit-check,
+        // so focusing can never change the line count (line-count flip used
+        // to alter th → shape → accidental page rebuild on focus change).
         const pad = focused ? " " : "";
-        const timeLines = textPx(head + rx + pad) <= MSG_TIME_W - 4
+        const fitW = MSG_TIME_W - 4 - 6;
+        const timeLines = textPx(head + rx) <= fitW
           ? [head + rx]
-          : textPx(head) <= MSG_TIME_W - 4
+          : textPx(head) <= fitW
             ? [head, rx].filter(Boolean)
             : [tag, tstr + rx];
         if (it.blocks > 1) timeLines.push(`${it.block + 1}/${it.blocks}`);
