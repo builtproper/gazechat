@@ -4,7 +4,7 @@
   "min_app_version": "2.0.0",
   "min_sdk_version": "0.0.12",
   "name": "GazeChat",
-  "package_id": "solutions.pleiades.evenmessages",
+  "package_id": "com.github.builtproper.gazechat",
   "permissions": [
     {
       "desc": "Connects to Beeper Desktop on your computer and opens the setup links shown in the app.",

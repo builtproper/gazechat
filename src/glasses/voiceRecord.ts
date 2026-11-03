@@ -177,14 +177,27 @@ async function fetchText(url: string): Promise<string> {
 async function ensureOpus(): Promise<void> {
   if (!opusLoader) {
     opusLoader = (async () => {
-      window.OPUS_SCRIPT_LOCATION = "/opus/"; // read by the glue at init
-      const [glueSrc, muxerSrc] = await Promise.all([
+      window.OPUS_SCRIPT_LOCATION = "/opus/"; // fallback if wasmBinary is ignored
+      const [glueSrc, muxerSrc, wasmBytes] = await Promise.all([
         fetchText("/opus/libopus-encoder.wasm.min.js"),
         fetchText("/opus/oggOpusEncoder.js"),
+        fetch("/opus/libopus-encoder.wasm.min.wasm").then((r) => {
+          if (!r.ok) throw new Error("wasm fetch failed (" + r.status + ")");
+          return r.arrayBuffer();
+        }).then((b) => new Uint8Array(b)),
       ]);
-      const muxer = new Function("module", "exports", "define",
-        glueSrc + "\n" + muxerSrc + "\nreturn typeof OggOpusEncoder !== 'undefined' ? OggOpusEncoder : undefined;"
-      )(undefined, undefined, undefined);
+      // Emscripten reads a pre-existing global `Module` and honours
+      // Module.wasmBinary → the glue performs NO fetch of its own (the
+      // WebView aborted on its relative-path resolution, Joel 03.11.)
+      (window as any).Module = { wasmBinary: wasmBytes };
+      let muxer: any;
+      try {
+        muxer = new Function("module", "exports", "define",
+          glueSrc + "\n" + muxerSrc + "\nreturn typeof OggOpusEncoder !== 'undefined' ? OggOpusEncoder : undefined;"
+        )(undefined, undefined, undefined);
+      } finally {
+        delete (window as any).Module; // don't leak into other wasm modules
+      }
       const lib = window.OpusEncoderLib;
       if (!lib) throw new Error("OpusEncoderLib missing (glue export failed)");
       if (!muxer) throw new Error("OggOpusEncoder missing (muxer export failed)");
