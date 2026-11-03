@@ -410,6 +410,13 @@ const GLYPH_W: Record<string, number> = {
   "1": 6.4, ":": 3.7, g: 10.7, r: 6.9, V: 12.8, K: 10.8, " ": 6.0,
   "ä": 10.8, "ö": 9.8, "ü": 10.8, "ß": 9.8, "Ä": 12.8, "Ö": 11.7, "Ü": 11.7,
   "|": 5.0, "▏": 20.0, "[": 6.5, "]": 6.5, "‹": 8.0, "›": 8.0, "…": 16.0,
+  // block glyphs U+2581..U+2588 all share the device advance measured for ▏
+  // (20 px) — the 16 px fallback under-counted the transport bar and caused
+  // the 15-slot wrap (measured on device, 03.11.)
+  "▁": 20.0, "▂": 20.0, "▃": 20.0, "▄": 20.0, "▅": 20.0, "▆": 20.0, "▇": 20.0, "█": 20.0,
+  "▒": 20.0, "▓": 20.0, "░": 20.0,
+  // em dash is M-wide by typographic definition (designem); en dash half
+  "—": 15.7, "–": 8.0,
 };
 const glyphW = (c: string) => GLYPH_W[c] ?? (c === " " ? 6 : c.codePointAt(0)! > 0x2600 ? 16 : 11.7);
 const textPx = (t: string): number => [...t].reduce((s, c) => s + glyphW(c), 0);
