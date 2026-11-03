@@ -183,7 +183,7 @@ export function startLoop(sender: FrameSender, onDelivered?: PositionReporter) {
   video.muted = !audioOn;
   if (video.ended) { try { video.currentTime = 0; } catch { /* ignore */ } }
   void video.play().catch(() => { /* autoplay blocked: poster stays */ });
-  // FREE-RUNNING loop (Joel 02.11.): chain the next frame immediately after
+  // FREE-RUNNING loop: chain the next frame immediately after
   // the previous send resolves — the bridge (~0.5–1s/frame) is the throttle,
   // so the loop self-paces to the fastest rate the transport allows. A 150ms
   // gap after each frame lets the transport-line text upgrade land before the

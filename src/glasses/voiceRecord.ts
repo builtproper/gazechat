@@ -1,5 +1,5 @@
 /**
- * Voice recording engine for GazeChat (Joel 03.11.).
+ * Voice recording engine for GazeChat.
  *
  * Tap the mic icon → the input container becomes a recorder: running MM:SS
  * plus a level history of block glyphs (█▇▆▅▄▃▂▁, U+2588..U+2581 — the same
@@ -88,7 +88,7 @@ export function recStart(tick: () => void) {
   lastLevel = 0;
   startedAt = Date.now();
   onTick = tick;
-  // 8 Hz: push one level slot + refresh the input line (Joel 03.11.)
+  // 8 Hz: push one level slot + refresh the input line
   if (tickTimer) clearInterval(tickTimer);
   tickTimer = setInterval(() => {
     if (state !== "recording") return;
@@ -158,7 +158,7 @@ export function pcmToWavBlob(pcm: Uint8Array): Blob {
 
 // ── OGG/Opus encoding (WhatsApp voice-note format) ──
 // The wasm glue is UMD; both script-tag and Vite-import loading failed to
-// land its export on window inside the Even WebView (Joel 03.11.). So:
+// land its export on window inside the Even WebView. So:
 // fetch the sources as TEXT and run them through new Function with
 // module/exports/define shadowed as LOCAL params — the UMD then takes its
 // documented browser branch (root = window → window.OpusEncoderLib), and
@@ -188,7 +188,7 @@ async function ensureOpus(): Promise<void> {
       ]);
       // Emscripten reads a pre-existing global `Module` and honours
       // Module.wasmBinary → the glue performs NO fetch of its own (the
-      // WebView aborted on its relative-path resolution, Joel 03.11.)
+      // WebView aborted on its relative-path resolution)
       (window as any).Module = { wasmBinary: wasmBytes };
       let muxer: any;
       try {

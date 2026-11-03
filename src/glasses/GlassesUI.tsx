@@ -1260,7 +1260,7 @@ function getMicIcon(dim = false): number[] {
 // words, Enter sends, Escape clears.
 let composeText = "";
 // the input container is the scroll catcher; its placeholder would visibly
-// rubber-band on gestures → dropped after the first scroll (Joel 02.11.)
+// rubber-band on gestures → dropped after the first scroll
 let inputHintGone = false;
 const INPUT_HINT = "Type on your phone or tap to record or transcribe";
 const inputHint = () => (inputHintGone ? " " : INPUT_HINT);
@@ -1270,7 +1270,7 @@ let composeWantFocus = false;
 let composeMirror: (() => void) | null = null;
 let composeSend: ((t: string) => Promise<boolean>) | null = null;
 let composeInput: HTMLInputElement | null = null;
-// draft sync (Joel 02.11.): prefill the compose box from Beeper's draft when a
+// draft sync: prefill the compose box from Beeper's draft when a
 // chat opens; write it back when the chat view is left. dirty-tracked so a
 // mere peek into a chat never rewrites the draft.
 let draftChatId: string | null = null;
@@ -1304,7 +1304,7 @@ function gcSaveDraftNow() {
 // set once the beeper client is available (assigned in the component body)
 let _beeperForDraft: { updateDraft: (id: string, t: string | null) => Promise<void> } | null = null;
 function beeperRefForDraft() { return _beeperForDraft; }
-// ── recorder UI state (Joel 03.11.) ──
+// ── recorder UI state ──
 // choose/review option: 0 = first line, 1 = second (scroll toggles)
 let recOption = 0;
 let recError = "";
@@ -2613,7 +2613,7 @@ export function GlassesUI({
     }
   }, [speechConfig, stopVoiceReply]);
 
-  // ═══════════ recorder state machine (Joel 03.11.) ═══════════
+  // ═══════════ recorder state machine ═══════════
   const recCloseMic = useCallback(async () => {
     if (evenHubUnsubscribeRef.current) { evenHubUnsubscribeRef.current(); evenHubUnsubscribeRef.current = null; }
     const b = await getBridge();
@@ -2704,7 +2704,7 @@ export function GlassesUI({
     try {
       const pcm = recMergePcm();
       // WhatsApp voice notes MUST be OGG/Opus (wav → "unsupported media
-      // type" on the bridge, Joel 03.11.)
+      // type" on the bridge)
       const ogg = await pcmToOggOpusBlob(pcm);
       const b64 = await blobToBase64(ogg);
       const uploadID = await beeper.uploadAssetBase64(b64, "voice-message.ogg", "audio/ogg; codecs=opus");
@@ -3386,7 +3386,7 @@ export function GlassesUI({
         if (nativeOverlayScreenRef.current) {
           return;
         }
-        // SPARING poll (Joel 02.11.): only while sitting on page 1 / entry 1,
+        // SPARING poll: only while sitting on page 1 / entry 1,
         // and the result is only STASHED — it gets applied when the user
         // pulls up at the top, never yanking the list around underneath them
         if (stateRef.current.currentScreen !== "chats") {
@@ -3641,7 +3641,7 @@ export function GlassesUI({
             micDimRef.current = false;
             inputHintGone = false;
             msgSigRef.current = ""; // force the messages page to rebuild on render
-            // prefill the compose box from Beeper's synced draft (Joel 02.11.)
+            // prefill the compose box from Beeper's synced draft
             gcSeedDraft(chat.id, (chat as { draft?: { text?: string } | null }).draft?.text);
             // messageScrollOffset will be set to max (bottom) in loadMessages
 
@@ -4315,7 +4315,7 @@ export function GlassesUI({
               ? msgs.length - 1
               : fi;
             const fm = eff >= 0 ? msgs[eff] : null;
-            // ── mic focus + recorder state machine (Joel 03.11.) ──
+            // ── mic focus + recorder state machine ──
             // exception: a video page keeps tap-to-play/pause on the mic tap
             const videoTap = fm && (fm.type || "").toUpperCase() === "VIDEO" && videoMsgIdRef.current === fm.id;
             if (fi < 0 && !videoTap) {
@@ -4334,7 +4334,7 @@ export function GlassesUI({
               return nav;
             }
             // voice: play/pause ONLY when the note itself holds the focus
-            // (mic focus must NOT start playback — Joel 03.11.)
+            // (mic focus must NOT start playback)
             if (fi >= 0 && fm && isVoiceMsg(fm)) {
               if (voiceMsgId() === fm.id) toggleVoice();
               else void setupVoicePreview(fm, true); // tap during fetch → autoplay on ready
@@ -4355,7 +4355,7 @@ export function GlassesUI({
                   return r === "success" || (r as any) === true;
                 }, () => {
                   // time rides the frame: refresh the transport line right
-                  // after each delivered image (deterministic 1 Hz, Joel 02.11.)
+                  // after each delivered image (deterministic 1 Hz)
                   videoPosRef.current = videoCurrentTime();
                   setState((st) => ({ ...st }));
                 });
@@ -4963,7 +4963,7 @@ export function GlassesUI({
       // overflows — overflow made the firmware scroll-jump on every upgrade
       const markerText = empty ? " " : markCol.map((m) => `${m}\n `).join("\n").replace(/\n $/, "");
       const labelText = filterLabel(filter);
-      // "X/Y+" on EVERY page while more chats can be fetched (Joel spec)
+      // "X/Y+" on EVERY page while more chats can be fetched 
       const xyRaw = `${page + 1}/${totalPages}${chatHasMoreRef.current ? "+" : ""}`;
       // center with leading spaces: (54px column - text) / 2 / 6px per space
       const xyPad = Math.max(0, Math.round((61 - textPx(xyRaw)) / 12));
