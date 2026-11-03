@@ -1025,12 +1025,18 @@ let msgIsGroup = false;
 function msgBubbleText(msg: BeeperMessage, all: BeeperMessage[]): string {
   let t = stripUnsupportedChars(formatMessageText(msg)).replace(/\r/g, "").trim();
   const ty0 = (msg.type || "").toUpperCase();
-  if (ty0 === "VOICE") {
+  if (isVoiceMsg(msg)) {
     // voice notes render as a one-line transport bar (video design); the
     // position/duration come from the voice engine when THIS message is the
     // loaded one, else a static 0:00 bar
     const active = voiceMsgId() === msg.id;
-    t = videoTransportLine(active ? voicePos() : 0, active ? voiceDur() : 0, active && voicePlaying());
+    const bar = videoTransportLine(active ? voicePos() : 0, active ? voiceDur() : 0, active && voicePlaying());
+    // forwarded notes carry a label ("↷ Forwarded") → keep it on its own line
+    // above the player instead of hiding the note behind the text
+    let label = t && t !== "[media]" && !t.startsWith("[") ? t.replace(/\u21B7\s*/g, "").trim() : "";
+    if (/^forwarded\b/i.test(label)) label = "Forwarded";
+    if (label && !label.endsWith(":")) label += ":";
+    t = label ? label + "\n" + bar : bar;
   } else if (!t || t === "[media]") {
     const fname = (msg.attachments as any[])?.[0]?.filename || (msg.attachments as any[])?.[0]?.fileName;
     t = ty0 === "IMAGE" ? "[Photo]" : ty0 === "VIDEO" ? "[Video]" : ty0 === "AUDIO" ? "[Audio]" : ty0 === "VOICE" ? "[Voice]" : ty0 === "FILE" ? (fname ? `[File: ${fname}]` : "[File]") : "[media]";
@@ -1115,7 +1121,12 @@ function msgLineCount(m: BeeperMessage, all: BeeperMessage[]): number {
 }
 // a message owns a block-paginated page when it's media or taller than the area
 function isVoiceMsg(m: BeeperMessage): boolean {
-  return (m.type || "").toUpperCase() === "VOICE";
+  const t = (m.type || "").toUpperCase();
+  if (t === "VOICE") return true;
+  // forwarded voice notes come through as AUDIO with an audio attachment
+  if (t === "AUDIO") return (m.attachments || []).some((a: any) =>
+    (a.mimeType || "").startsWith("audio") || (a.type || "").toLowerCase() === "audio");
+  return false;
 }
 function ownsPage(m: BeeperMessage, all: BeeperMessage[]): boolean {
   return isMediaMsg(m) || msgNatH(m, all) > MSG_AREA_H;
