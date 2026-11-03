@@ -56,6 +56,11 @@ import {
   voiceDur, voicePos, voicePlaying, voiceMsgId,
   setVoiceSpeed,
 } from "./voicePreview";
+import {
+  recGetState, recSetState, recStart, recHalt, recReset, recAddChunk,
+  recSeconds, recBarLine, recMergePcm, recHasAudio, fmtMMSS,
+  blobToBase64,
+} from "./voiceRecord";
 import { imgLayout as imgLayoutFor, renderImageSlices } from "./imagePreview";
 
 // ═══════════════════════════════════════════════════════════════
@@ -1299,6 +1304,47 @@ function gcSaveDraftNow() {
 // set once the beeper client is available (assigned in the component body)
 let _beeperForDraft: { updateDraft: (id: string, t: string | null) => Promise<void> } | null = null;
 function beeperRefForDraft() { return _beeperForDraft; }
+// ── recorder UI state (Joel 03.11.) ──
+// choose/review option: 0 = first line, 1 = second (scroll toggles)
+let recOption = 0;
+let recComposeBackup = "";
+let recTranscript = "";
+
+function recActive() { return recGetState() !== "idle"; }
+
+/** Input-container text for the current recorder state (null = normal). */
+function recInputLine(): string | null {
+  switch (recGetState()) {
+    case "recording": return recBarLine(22); // 22×20px + MM:SS ≈ 496px < 530 field
+    case "choose":
+      return recOption === 0
+        ? `Tap to send as voice message (${fmtMMSS(recSeconds())}) or \u2193`
+        : "Tap to transcribe or \u2191";
+    case "transcribing": return "Transcribing...";
+    case "review":
+      return recOption === 0
+        ? "Tap to send transcribed text or \u2193"
+        : "Tap to send recorded voice message instead or \u2191";
+    default: return null;
+  }
+}
+/** Write the input container (11) to the current recorder/compose line. */
+function recRefreshInput() {
+  const b = bridgeInstance;
+  if (!b) return;
+  void b.textContainerUpgrade(new TextContainerUpgrade({
+    containerID: 11, containerName: "input", content: inputContent(), textColor: inputBright(),
+  }));
+}
+
+/** What the input container should show right now (recorder wins over compose). */
+function inputContent(): string {
+  return recInputLine() ?? (composeText ? composeWindow() : inputHint());
+}
+function inputBright(): number {
+  return recActive() || composeText ? 4 : 0;
+}
+
 let composePoll: ReturnType<typeof setInterval> | null = null;
 const COMPOSE_PX = 520; // usable width of the glasses input container
 
@@ -2557,6 +2603,137 @@ export function GlassesUI({
       isVoiceTranscribingRef.current = false;
     }
   }, [speechConfig, stopVoiceReply]);
+
+  // ═══════════ recorder state machine (Joel 03.11.) ═══════════
+  const recCloseMic = useCallback(async () => {
+    if (evenHubUnsubscribeRef.current) { evenHubUnsubscribeRef.current(); evenHubUnsubscribeRef.current = null; }
+    const b = await getBridge();
+    try { await b?.audioControl(false); } catch { /* ignore */ }
+  }, []);
+
+  const recBegin = useCallback(async () => {
+    recComposeBackup = composeText;
+    recOption = 0;
+    recTranscript = "";
+    recStart(() => recRefreshInput());
+    recRefreshInput();
+    const b = await getBridge();
+    if (!b) { recReset(); recRefreshInput(); return; }
+    evenHubUnsubscribeRef.current = b.onEvenHubEvent((event: EvenHubEvent) => {
+      if (!event.audioEvent || recGetState() !== "recording") return;
+      const pcm = event.audioEvent.audioPcm;
+      if (pcm?.length) recAddChunk(new Uint8Array(pcm));
+    });
+    try {
+      const opened = await b.audioControl(true);
+      if (!opened) throw new Error("mic rejected");
+    } catch (e) {
+      console.warn("[rec] mic open failed:", String(e).slice(0, 80));
+      await recCloseMic();
+      recReset();
+      composeText = recComposeBackup;
+      recRefreshInput();
+    }
+  }, [recCloseMic]);
+
+  const recFinishToChoose = useCallback(async () => {
+    recHalt();
+    await recCloseMic();
+    recSetState("choose");
+    recOption = 0;
+    recRefreshInput();
+  }, [recCloseMic]);
+
+  const recTranscribe = useCallback(async () => {
+    if (!speechConfig?.baseUrl || !speechConfig?.token || !speechConfig?.model) {
+      // no ASR configured → nothing to transcribe into; back to choose
+      recRefreshInput();
+      return;
+    }
+    recSetState("transcribing");
+    recRefreshInput();
+    try {
+      const text = await transcribePcmAudio(speechConfig, recMergePcm());
+      if (recGetState() !== "transcribing") return; // cancelled meanwhile
+      recTranscript = text || "(no speech detected)";
+      recSetState("review");
+      recOption = 0;
+      recRefreshInput();
+      setState((st) => ({ ...st })); // re-render: transcript in message area
+    } catch (e) {
+      console.warn("[rec] transcribe failed:", String(e).slice(0, 100));
+      recSetState("choose");
+      recRefreshInput();
+    }
+  }, [speechConfig]);
+
+  const recAfterSend = useCallback(() => {
+    recReset();
+    recTranscript = "";
+    recComposeBackup = "";
+    msgFocusRef.current = -1;
+    msgBlockRef.current = 0;
+    setState((st) => ({ ...st }));
+  }, []);
+
+  const recSendTranscript = useCallback(async () => {
+    const text = recTranscript.trim();
+    if (!text || text === "(no speech detected)") return;
+    const ok = await sendMessage(text);
+    if (ok) recAfterSend();
+    else { recSetState("review"); recRefreshInput(); }
+  }, [sendMessage, recAfterSend]);
+
+  const recSendVoice = useCallback(async () => {
+    if (!recHasAudio() || !beeper) return;
+    const chat = stateRef.current.selectedChat;
+    if (!chat) return;
+    try {
+      const pcm = recMergePcm();
+      const wav = pcmToWavBlob(pcm);
+      const b64 = await blobToBase64(wav);
+      const uploadID = await beeper.uploadAssetBase64(b64, "voice-message.wav", "audio/wav");
+      await beeper.sendAttachment(chat, {
+        uploadID, type: "voice-note", mimeType: "audio/wav",
+        fileName: "voice-message.wav", duration: recSeconds(),
+      });
+      // same post-send housekeeping as text sends
+      suppressReloadRef.current = true;
+      if (suppressReloadTimeoutRef.current) clearTimeout(suppressReloadTimeoutRef.current);
+      suppressReloadTimeoutRef.current = setTimeout(() => { suppressReloadRef.current = false; suppressReloadTimeoutRef.current = null; }, 2000);
+      void _beeperForDraft?.updateDraft(chat, null).catch(() => {});
+      draftSaved = "";
+      if (composeText) { recComposeBackup = composeText; } // keep typed text
+      else recComposeBackup = "";
+      recAfterSend();
+      if (recComposeBackup) { composeText = recComposeBackup; recRefreshInput(); }
+      void loadMessages(chat);
+    } catch (e) {
+      console.warn("[rec] voice send failed:", String(e).slice(0, 120));
+      recSetState("choose");
+      recRefreshInput();
+    }
+  }, [beeper, loadMessages, recAfterSend]);
+
+  const recCancel = useCallback(async () => {
+    if (!recActive()) return;
+    recHalt();
+    await recCloseMic();
+    recReset();
+    recTranscript = "";
+    composeText = recComposeBackup; // restore whatever was typed before recording
+    recRefreshInput();
+    setState((st) => ({ ...st }));
+  }, [recCloseMic]);
+
+  const recFnRef = useRef<{
+    begin: () => Promise<void>; finish: () => Promise<void>; transcribe: () => Promise<void>;
+    sendVoice: () => Promise<void>; sendText: () => Promise<void>; cancel: () => Promise<void>;
+  } | null>(null);
+  recFnRef.current = {
+    begin: () => recBegin(), finish: () => recFinishToChoose(), transcribe: () => recTranscribe(),
+    sendVoice: () => recSendVoice(), sendText: () => recSendTranscript(), cancel: () => recCancel(),
+  };
 
   const handleVoiceReplySelect = useCallback(() => {
     const currentState = stateRef.current;
@@ -3988,6 +4165,15 @@ export function GlassesUI({
           if (snapshot.currentScreen === "messages") {
             const messages = snapshot.messages;
             if (messages.length === 0) return nav;
+            const rs = recGetState();
+            // capture/transcription in progress: gestures are inert
+            if (rs === "recording" || rs === "transcribing") return nav;
+            // recorder choice screens: scroll toggles the two options
+            if (rs === "choose" || rs === "review") {
+              recOption = recOption === 0 ? 1 : 0;
+              recRefreshInput();
+              return nav;
+            }
             msgIsGroup = (snapshot.chats.find((c) => c.id === snapshot.selectedChat) as { type?: string } | undefined)?.type === "group";
             if (!inputHintGone) {
               inputHintGone = true;
@@ -4113,6 +4299,24 @@ export function GlassesUI({
               ? msgs.length - 1
               : fi;
             const fm = eff >= 0 ? msgs[eff] : null;
+            // ── mic focus + recorder state machine (Joel 03.11.) ──
+            // exception: a video page keeps tap-to-play/pause on the mic tap
+            const videoTap = fm && (fm.type || "").toUpperCase() === "VIDEO" && videoMsgIdRef.current === fm.id;
+            if (fi < 0 && !videoTap) {
+              const rs = recGetState();
+              const f = recFnRef.current;
+              if (!f) return nav;
+              if (rs === "idle") void f.begin();
+              else if (rs === "recording") void f.finish();
+              else if (rs === "choose") {
+                if (recOption === 0) void f.sendVoice();
+                else void f.transcribe();
+              } else if (rs === "review") {
+                if (recOption === 0) void f.sendText();
+                else void f.sendVoice();
+              }
+              return nav;
+            }
             // voice: play/pause ONLY when the note itself holds the focus
             // (mic focus must NOT start playback — Joel 03.11.)
             if (fi >= 0 && fm && isVoiceMsg(fm)) {
@@ -4184,6 +4388,22 @@ export function GlassesUI({
         }
 
         case "GO_BACK": {
+          // recorder states: double-tap cancels back to the normal chat view;
+          // during transcribing it returns to the choose screen (audio kept,
+          // the late transcript result is discarded by the state check)
+          if (snapshot.currentScreen === "messages" && recActive()) {
+            const rs = recGetState();
+            if (rs === "transcribing" || rs === "review") {
+              // one step back: late transcript results are discarded by the
+              // state check in recTranscribe
+              recSetState("choose");
+              recOption = 0;
+              recRefreshInput();
+            } else {
+              void recFnRef.current?.cancel();
+            }
+            return nav;
+          }
           // Even Hub submission requirement: root-page double-tap must show
           // the native exit dialogue. See page-lifecycle.md.
           // The unified chat list is the root screen now.
@@ -4453,7 +4673,15 @@ export function GlassesUI({
       msgIsGroup = (chat as { type?: string } | undefined)?.type === "group";
       const chatName = chat ? truncatePx(chat.title, 300) : "Messages";
       const focus = Math.min(msgFocusRef.current, Math.max(0, snapshot.messages.length - 1));
-      const layout = computeMsgLayout(snapshot.messages, msgBlockRef.current, snapshot.isLoading, focus);
+      let layout = computeMsgLayout(snapshot.messages, msgBlockRef.current, snapshot.isLoading, focus);
+      if (recGetState() === "review") {
+        // big bordered field where messages normally are: the transcript
+        // (truncated to the page — scroll toggles the send options instead)
+        const tw = 574 - MSG_TIME_W - 4 - 14;
+        const lines = wrapToPx(stripUnsupportedChars(recTranscript), tw);
+        const shown = lines.length > 6 ? lines.slice(0, 6).concat(["…"]) : lines;
+        layout = { focus: true, items: [{ msg: { timestamp: new Date().toISOString(), isSender: true } as unknown as BeeperMessage, lines: shown, block: 0, blocks: 1 }] };
+      }
       const items = layout.items;
       const videoFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "VIDEO";
       const imgFocus = layout.focus && !!items[0] && (items[0].msg.type || "").toUpperCase() === "IMAGE";
@@ -4525,10 +4753,10 @@ export function GlassesUI({
       composeMirror = () => {
         const b = glassesBridgeRef.current;
         if (!b) return;
-        const txt = composeText ? composeWindow() : inputHint();
+        const txt = inputContent();
         if (txt === lastMirrorTxt) return;
         lastMirrorTxt = txt;
-        void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt, textColor: composeText ? 4 : 0 }));
+        void b.textContainerUpgrade(new TextContainerUpgrade({ containerID: 11, containerName: "input", content: txt, textColor: inputBright() }));
       };
       // pad so the name starts clear of the avatar image (x 70..104)
       const lead = `${clockText()} |`;
@@ -4555,7 +4783,7 @@ export function GlassesUI({
           mk(6, "bub2", slots[2].bx, BUB_W, slots[2].y, slots[2].h, slots[2].bubble, slots[2].show ? 1 : 0, slots[2].bright),
           mk(7, "time2", slots[2].tx, TIME_W, slots[2].timeY, slots[2].th, slots[2].time, 0, slots[2].bright === 4 ? 2 : 1),
         ]),
-        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: composeText ? composeWindow() : inputHint(), textColor: composeText ? 4 : 0, isEventCapture: 1, zOrderIndex: 11 }),
+        new TextContainerProperty({ containerID: 11, containerName: "input", xPosition: 2, yPosition: 250, width: 534, height: 36, paddingLength: 2, borderWidth: 1, borderColor: 8, borderRadius: 0, content: inputContent(), textColor: inputBright(), isEventCapture: 1, zOrderIndex: 11 }),
       ];
 
       if (needRebuild) {
@@ -4896,6 +5124,7 @@ export function GlassesUI({
   useEffect(() => {
     if (previousScreenRef.current !== state.currentScreen) {
       if (previousScreenRef.current === "messages" && state.currentScreen !== "messages") {
+        if (recActive()) void recFnRef.current?.cancel();
         unloadVideo();
         unloadVoice();
         videoLoopingRef.current = false;

@@ -516,6 +516,43 @@ export class BeeperClient {
   }
 
   /**
+   * Upload base64-encoded file content → uploadID (for voice notes etc.).
+   * Beeper: POST /v1/assets/upload/base64 {content, fileName, mimeType}.
+   */
+  async uploadAssetBase64(content: string, fileName: string, mimeType: string): Promise<string> {
+    const response = await fetch(`${this.baseUrl}/v1/assets/upload/base64`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({ content, fileName, mimeType }),
+    })
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).trim() || response.statusText
+      throw new Error(`Upload failed (${response.status}): ${detail}`)
+    }
+    const json = await response.json()
+    if (!json.uploadID) throw new Error('Upload returned no uploadID')
+    return json.uploadID
+  }
+
+  /**
+   * Send a message with an attachment reference (uploadID from uploadAssetBase64).
+   */
+  async sendAttachment(chatID: string, attachment: {
+    uploadID: string; type?: string; mimeType?: string; fileName?: string; duration?: number
+  }, text = ''): Promise<{ pendingMessageID: string }> {
+    const response = await fetch(`${this.baseUrl}/v1/chats/${encodeURIComponent(chatID)}/messages`, {
+      method: 'POST',
+      headers: this.headers,
+      body: JSON.stringify({ text, attachment }),
+    })
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).trim() || response.statusText
+      throw new Error(`Send attachment failed (${response.status}): ${detail}`)
+    }
+    return response.json()
+  }
+
+  /**
    * Search chats
    */
   async searchChats(query: string): Promise<BeeperChat[]> {
