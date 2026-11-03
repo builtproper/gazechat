@@ -88,13 +88,13 @@ export function recStart(tick: () => void) {
   lastLevel = 0;
   startedAt = Date.now();
   onTick = tick;
-  // 4 Hz: push one level slot + refresh the input line
+  // 8 Hz: push one level slot + refresh the input line (Joel 03.11.)
   if (tickTimer) clearInterval(tickTimer);
   tickTimer = setInterval(() => {
     if (state !== "recording") return;
     pushBar();
     onTick?.();
-  }, 250);
+  }, 125);
 }
 
 export function recAddChunk(pcm: Uint8Array) {
@@ -177,8 +177,23 @@ async function ensureOpus(): Promise<void> {
   if (!opusLoader) {
     opusLoader = (async () => {
       window.OPUS_SCRIPT_LOCATION = "/opus/"; // read at glue module-init
-      await loadScript("/opus/libopus-encoder.wasm.min.js");
-      await loadScript("/opus/oggOpusEncoder.js"); // classic script → window.OggOpusEncoder
+      // The UMD glue exports to `module.exports` when a `module` global exists
+      // (Flutter WebViews often define one) → window.OpusEncoderLib would stay
+      // empty. Hide it during load to force the browser-global branch.
+      const w = window as any;
+      const savedModule = w.module, savedExports = w.exports;
+      try {
+        w.module = undefined; w.exports = undefined; w.define = undefined;
+        await loadScript("/opus/libopus-encoder.wasm.min.js?v=2");
+        await loadScript("/opus/oggOpusEncoder.js?v=2"); // classic script → window.OggOpusEncoder
+      } finally {
+        w.module = savedModule; w.exports = savedExports;
+      }
+      if (!window.OggOpusEncoder) {
+        // oggOpusEncoder.js declares a top-level var → global in classic
+        // scripts; if the environment shadowed it, pull it from the module
+        throw new Error("OggOpusEncoder missing after script load");
+      }
       const lib = window.OpusEncoderLib;
       if (!lib) throw new Error("OpusEncoderLib missing after script load");
       if (!lib.isReady) await new Promise<void>((res) => { lib.onready = () => res(); });
