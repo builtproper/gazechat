@@ -18,7 +18,6 @@ import {
   deactivateKeepAlive,
 } from "even-toolkit/keep-alive";
 import { mapGlassEvent } from "even-toolkit/action-map";
-import { buildStaticActionBar } from "even-toolkit/action-bar";
 import { bindKeyboard } from "even-toolkit/keyboard";
 import { useCallback, useEffect, useState, useRef } from "react";
 
@@ -40,7 +39,6 @@ import {
   TextContainerProperty,
   TextContainerUpgrade,
 } from "@evenrealities/even_hub_sdk";
-import { getServiceIcon } from "./platformIcons";
 import {
   pngDataUrlToBytes,
   normalizePlatform,
@@ -72,7 +70,6 @@ import { imgLayout as imgLayoutFor, renderImageSlices } from "./imagePreview";
 // Visible width: ~48 chars, but leaving padding, use 40 chars
 const DISPLAY_WIDTH = 60; // Max characters per line
 const DISPLAY_LINES = 8; // Max lines on Even G2 display (288px / ~40px per line)
-const STICKY_FOOTER_LINES = 2; // separator + bottom action/menu line
 const SEPARATOR_LINE = "----------------------------------------"; // 40 dashes
 const GLASSES_DISPLAY_WIDTH = 576;
 const GLASSES_DISPLAY_HEIGHT = 288;
@@ -120,12 +117,6 @@ async function getBridge(): Promise<EvenAppBridge | null> {
 }
 
 // ASCII indicators (safe for glasses font)
-const ICONS = {
-  SELECTED: ">",
-  BACK: "<",
-  UNREAD: "[!",
-};
-
 // Quick reply presets (2 columns x 4 rows = 8 replies)
 const QUICK_REPLIES = [
   "Voice",
@@ -436,20 +427,6 @@ function truncatePx(text: string, maxPx: number): string {
 }
 
 // Pad with spaces so the string occupies at least targetPx (proportional-safe).
-function padPx(text: string, targetPx: number): string {
-  let out = text;
-  let w = textPx(out);
-  while (w < targetPx && out.length < 60) {
-    out += " ";
-    w += glyphW(" ");
-  }
-  return out;
-}
-
-// Convert ASCII to fullwidth for consistent rendering on G2 proportional font.
-// The glasses firmware uses a proportional font where ASCII characters have
-// varying widths. CJK fullwidth characters are all the same width, so
-// converting display text ensures column alignment works correctly.
 // See: https://github.com/nickustinov/even-g2-notes/blob/main/docs/display.md
 function toFullwidth(str: string): string {
   return str.replace(/[\x20-\x7E]/g, (ch) =>
@@ -458,14 +435,6 @@ function toFullwidth(str: string): string {
 }
 
 // Calculate the scroll position to show maximum messages while keeping the bottom visible
-function getMessagePreview(msg: BeeperMessage): string {
-  const content = stripUnsupportedChars(formatMessageText(msg));
-  // Flatten newlines for single-line preview
-  return content.replace(/\r\n/g, " ").replace(/\n/g, " ").replace(/\r/g, " ");
-}
-
-// Word-wrap text to fit within maxWidth, breaking words as needed
-// date tag above the time for older messages:
 // today → none; ≤7 days → Mon/Tue/…; ≤1 year → TT.MM.; older → TT.MM.JJ
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 function msgDateTag(timestamp: string): string {
@@ -491,19 +460,6 @@ function formatTime(timestamp: string): string {
     .slice(0, 5);
 }
 
-function getVisibleChatWindow(
-  chats: BeeperChat[],
-  highlightedIdx: number,
-): { start: number; visible: BeeperChat[] } {
-  const maxItems = 9; // full-height list container: 284px / ~28px per line (KM fits 10)
-  const maxStart = Math.max(0, chats.length - maxItems);
-  const start = Math.max(0, Math.min(maxStart, highlightedIdx - 1));
-
-  return {
-    start,
-    visible: chats.slice(start, start + maxItems),
-  };
-}
 
 function wrapText(text: string, maxWidth: number): string[] {
   const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
@@ -1700,368 +1656,6 @@ async function transcribePcmAudio(
 // ═══════════════════════════════════════════════════════════════
 // DISPLAY BUILDERS
 // ═══════════════════════════════════════════════════════════════
-
-function buildAccountsDisplay(
-  state: AppState,
-  highlightedIdx: number,
-): DisplayLine[] {
-  const lines: DisplayLine[] = [];
-
-  // Header: "GazeChat" + time (+ DEMO indicator if active)
-  const time = new Date().toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  const title = state.demoMode ? "GazeChat [DEMO]" : "GazeChat";
-  lines.push(line(buildHeaderLine(title, time), "inverted"));
-
-  // "All Chats" option
-  const allSelected = highlightedIdx === 0;
-  lines.push(
-    line(
-      `${allSelected ? ICONS.SELECTED : " "} * All Chats`,
-      allSelected ? "inverted" : "normal",
-    ),
-  );
-
-  // Unique accounts
-  const seen = new Set<string>();
-  let itemIdx = 1; // Start at 1 since 0 is "All Chats"
-
-  state.accounts.forEach((a) => {
-    if (!seen.has(a.accountID)) {
-      seen.add(a.accountID);
-      const isSelected = highlightedIdx === itemIdx;
-      const icon = getServiceIcon(a.accountID);
-      const name = a.user.fullName || a.user.username || "Unknown";
-
-      // Full width line
-      const lineText = `${isSelected ? ICONS.SELECTED : " "} ${icon} ${padRight(truncateName(name, 28), 28)}`;
-      lines.push(line(lineText, isSelected ? "inverted" : "normal"));
-      itemIdx++;
-    }
-  });
-
-  lines.push(sep());
-  lines.push(line(buildStaticActionBar(["Select"], -1), "meta"));
-
-  return lines;
-}
-
-function buildChatsDisplay(
-  state: AppState,
-  highlightedIdx: number,
-): DisplayLine[] {
-  const lines: DisplayLine[] = [];
-
-  if (state.isLoading) {
-    // Show loading indicator
-    lines.push(line("Loading...", "normal"));
-    lines.push(line("", "normal"));
-    lines.push(line("", "normal"));
-    lines.push(line("", "normal"));
-  } else if (state.setupRequired) {
-    lines.push(line("Open the app on", "normal"));
-    lines.push(line("your phone to", "normal"));
-    lines.push(line("configure it.", "normal"));
-  } else if (state.chats.length === 0) {
-    lines.push(line("No chats found", "normal"));
-  } else {
-    const { start, visible } = getVisibleChatWindow(
-      state.chats,
-      highlightedIdx,
-    );
-
-    visible.forEach((chat, idx) => {
-      const globalIdx = start + idx;
-      const isSelected = globalIdx === highlightedIdx;
-
-      // Format: > [12]  Contact name…   (unread badge FIRST, pixel-aligned)
-      const marker = `${isSelected ? ICONS.SELECTED : " "} `;
-      const badge =
-        chat.unreadCount > 0 ? `[${chat.unreadCount}]` : "";
-      // badge column: fixed pixel width so names always start at the same x
-      const BADGE_PX = 52; // fits [999] + gap; single digits get the 2-space gap via padding
-      const badgeCol = padPx(badge ? badge + " " : "", BADGE_PX);
-      // name gets the rest of the list container width (~500px usable)
-      const namePx = 500 - textPx(marker) - textPx(badgeCol);
-      const name = truncatePx(chat.title, namePx);
-      const lineText = `${marker}${badgeCol}${name}`;
-      lines.push(line(lineText, isSelected ? "inverted" : "normal"));
-    });
-  }
-
-  return lines;
-}
-
-function buildMessagesDisplay(
-  state: AppState,
-  _highlightedIdx: number,
-): DisplayLine[] {
-  const lines: DisplayLine[] = [];
-
-  // Header with back + chat name
-  const chat = state.chats.find((c) => c.id === state.selectedChat);
-  const chatName = chat ? truncateName(chat.title, 20) : "Messages";
-  lines.push(
-    line(buildHeaderLine(`${ICONS.BACK} ${chatName}`, ""), "inverted"),
-  );
-
-  // Show loading indicator if loading
-  if (state.isLoading) {
-    lines.push(line("Loading messages...", "normal"));
-    if (state.messageLoadingTimedOut) {
-      lines.push(line("", "normal"));
-      lines.push(line("Open the app on", "normal"));
-      lines.push(line("your phone to", "normal"));
-      lines.push(line("configure it.", "normal"));
-    } else {
-      lines.push(line("", "normal"));
-      lines.push(line("", "normal"));
-      lines.push(line("", "normal"));
-      lines.push(line("", "normal"));
-    }
-    lines.push(sep());
-    lines.push(line(buildStaticActionBar(["Back"], 0), "meta"));
-    return lines;
-  }
-
-  if (state.messageLoadFailed || state.setupRequired) {
-    lines.push(line("", "normal"));
-    lines.push(line("Open the app on", "normal"));
-    lines.push(line("your phone to", "normal"));
-    lines.push(line("configure it.", "normal"));
-    lines.push(sep());
-    lines.push(line(buildStaticActionBar(["Back"], 0), "meta"));
-    return lines;
-  }
-
-  // Calculate scroll window
-  const totalMessages = state.messages.length;
-  const maxScroll = Math.max(0, totalMessages - 1);
-  const selectedIdx = Math.min(state.messageScrollOffset, maxScroll);
-
-  // Visible window: keep selected message in view
-  const maxItems = DISPLAY_LINES - 3; // header, separator, action bar
-  const maxStart = Math.max(0, totalMessages - maxItems);
-  const start = Math.max(0, Math.min(maxStart, selectedIdx - 1));
-  const visibleMessages = state.messages.slice(start, start + maxItems);
-  const end = start + visibleMessages.length;
-
-  // Indicator if more messages above
-  if (start > 0) {
-    lines.push(line("          ▲", "meta"));
-  }
-
-  // Render message list with cursor on selected message
-  if (totalMessages === 0) {
-    lines.push(line("No messages yet - send one!", "normal"));
-  } else {
-    visibleMessages.forEach((msg, idx) => {
-      const globalIdx = start + idx;
-      const isSelected = globalIdx === selectedIdx;
-      const time = formatTime(msg.timestamp);
-      const sender = truncateName(senderLabel(msg) || "?", 8);
-      const prefix = `[${time}] ${sender}: `;
-      const preview = truncate(
-        getMessagePreview(msg),
-        DISPLAY_WIDTH - prefix.length - 2,
-      ); // -2 for cursor + space
-      const lineText = `${isSelected ? ICONS.SELECTED : " "} ${prefix}${preview}`;
-      lines.push(line(lineText, isSelected ? "inverted" : "normal"));
-    });
-  }
-
-  // Indicator if more messages below
-  if (end < totalMessages) {
-    lines.push(line("          ▼", "meta"));
-  }
-
-  lines.push(sep());
-
-  // Action bar with position info
-  const posText = totalMessages > 0 ? `${selectedIdx + 1}/${totalMessages}` : "";
-  lines.push(
-    line(
-      buildStaticActionBar(["Back"], -1) + (posText ? "  " + posText : ""),
-      "meta",
-    ),
-  );
-
-  return lines;
-}
-
-function buildMessageDetailDisplay(
-  state: AppState,
-  imageStatus: MessageDetailImageStatus,
-): DisplayLine[] {
-  const lines: DisplayLine[] = [];
-  const msg = state.messages[state.selectedMessageIndex];
-
-  if (!msg) {
-    lines.push(line(buildHeaderLine("Message", ""), "inverted"));
-    lines.push(line("Message unavailable", "normal"));
-    lines.push(line("", "normal"));
-    lines.push(line("", "normal"));
-    lines.push(line("", "normal"));
-    lines.push(line("", "normal"));
-    lines.push(sep());
-    lines.push(line("Click: Reply  Double: Back", "meta"));
-    return lines;
-  }
-
-  const sender = truncateName(senderLabel(msg) || msg.senderID || "Unknown", 20);
-  const time = formatTime(msg.timestamp);
-  const wrappedBody = getMessageDetailWrappedBody(msg);
-  const hasLoadedImage = imageStatus === "loaded";
-  const availableBodyLines = hasLoadedImage
-    ? 2
-    : Math.max(0, DISPLAY_LINES - 4);
-  const maxScroll = Math.max(0, wrappedBody.length - availableBodyLines);
-  const scrollOffset = Math.min(state.messageDetailScrollOffset, maxScroll);
-  const visibleBody = wrappedBody.slice(
-    scrollOffset,
-    scrollOffset + availableBodyLines,
-  );
-
-  lines.push(line(buildHeaderLine(sender, time), "inverted"));
-  if (imageStatus === "loading") {
-    lines.push(line("Loading image...", "meta"));
-  } else if (imageStatus === "failed") {
-    lines.push(line("Image unavailable", "meta"));
-  }
-  lines.push(...visibleBody.map((entry) => line(entry, "normal")));
-  while (lines.length < DISPLAY_LINES - 3) {
-    lines.push(line("", "normal"));
-  }
-  const indicator =
-    maxScroll > 0
-      ? `${scrollOffset > 0 ? "▲ " : ""}${maxScroll > scrollOffset ? "▼ " : ""}${Math.min(scrollOffset + availableBodyLines, wrappedBody.length)}/${wrappedBody.length}`
-      : `${wrappedBody.length}/${wrappedBody.length}`;
-  lines.push(line(indicator, "meta"));
-
-  lines.push(sep());
-  lines.push(line("Click: Reply  Double: Back", "meta"));
-
-  return lines;
-}
-
-function buildQuickReplyDisplay(
-  state: AppState,
-  highlightedIdx: number,
-): DisplayLine[] {
-  const lines: DisplayLine[] = [];
-
-  const msg = state.messages[state.selectedMessageIndex];
-  const sender = msg
-    ? truncateName(senderLabel(msg) || "Unknown", 16)
-    : "Unknown";
-  lines.push(line(buildHeaderLine(`Reply: ${sender}`, ""), "inverted"));
-
-  const selectedReply =
-    QUICK_REPLIES[Math.min(highlightedIdx, QUICK_REPLIES.length - 1)] || "";
-  const availableReplyRows = Math.max(
-    0,
-    DISPLAY_LINES - 1 - STICKY_FOOTER_LINES,
-  );
-  const optionLines: DisplayLine[] = QUICK_REPLIES.map((reply, idx) => {
-    const isSelected = idx === highlightedIdx;
-    const prefix = isSelected ? ICONS.SELECTED : " ";
-    return line(
-      `${prefix} ${truncate(reply, 34)}`,
-      isSelected ? "inverted" : "normal",
-    );
-  });
-
-  const visibleCount = Math.min(optionLines.length, availableReplyRows);
-  const windowStart = Math.max(
-    0,
-    Math.min(
-      highlightedIdx - Math.floor(visibleCount / 2),
-      Math.max(0, optionLines.length - visibleCount),
-    ),
-  );
-
-  lines.push(...optionLines.slice(windowStart, windowStart + visibleCount));
-  lines.push(sep());
-  const footerLabel =
-    selectedReply === "Voice"
-      ? "Click to speak"
-      : `Send : ${truncate(selectedReply, 34)}`;
-  lines.push(line(footerLabel, "meta"));
-
-  return lines;
-}
-
-function buildVoiceReplyDisplay(state: AppState): DisplayLine[] {
-  const lines: DisplayLine[] = [];
-  const msg = state.messages[state.selectedMessageIndex];
-  const sender = msg
-    ? truncateName(senderLabel(msg) || "Unknown", 16)
-    : "Unknown";
-  const status = state.voiceStatus || "Speak now";
-  const isVoiceReady = state.voiceTranscript.trim().length > 0;
-  const isSpeechUnavailable =
-    status === VOICE_NOT_CONFIGURED_STATUS ||
-    status === VOICE_MIC_UNAVAILABLE_STATUS ||
-    status === VOICE_TRANSCRIPTION_FAILED_STATUS;
-  const isTranscribing = status === "Transcribing...";
-  const isSending = status === VOICE_SENDING_STATUS;
-  const sendFailed = status === VOICE_SEND_FAILED_STATUS;
-  const isRecording = status === "Listening..." && state.voiceAudioBytes > 0;
-
-  lines.push(line(buildHeaderLine(`Voice: ${sender}`, ""), "inverted"));
-
-  const voiceBody =
-    isSending || sendFailed ? status : state.voiceTranscript || status;
-  const bodyLines = [
-    line(
-      isSending
-        ? "Sending reply"
-        : sendFailed
-          ? "Reply not sent"
-          : isVoiceReady
-            ? "Review reply"
-        : isSpeechUnavailable
-          ? "Voice unavailable"
-          : isTranscribing
-            ? "Processing audio"
-            : "Listening...",
-      "normal",
-    ),
-    line(truncate(voiceBody, 38), "normal"),
-  ];
-  const availableBodyLines = Math.max(
-    0,
-    DISPLAY_LINES - 1 - STICKY_FOOTER_LINES,
-  );
-
-  lines.push(...bodyLines.slice(0, availableBodyLines));
-  lines.push(sep());
-  lines.push(
-    line(
-      isSending
-        ? "Please wait"
-        : sendFailed
-          ? "Click to retry"
-          : isVoiceReady
-            ? "Click to send"
-        : isSpeechUnavailable
-          ? status === VOICE_NOT_CONFIGURED_STATUS
-            ? "Configure Speech in Settings"
-            : "Click to retry"
-          : isTranscribing
-            ? "Please wait"
-            : isRecording
-              ? "Click when done"
-              : "Speak now",
-      "meta",
-    ),
-  );
-
-  return lines;
-}
-
 function buildStartupDisplay(tick: number): DisplayLine[] {
   const lines: DisplayLine[] = [];
   const time = new Date().toLocaleTimeString([], {
@@ -4174,32 +3768,13 @@ export function GlassesUI({
   }
 
   const getDisplayLines = useCallback(
-    (snapshot: AppState, nav: GlassNavState): DisplayLine[] => {
-      switch (snapshot.currentScreen) {
-        case "accounts":
-          return buildAccountsDisplay(snapshot, nav.highlightedIndex);
-        case "startup":
-          return buildStartupDisplay(snapshot.startupTick);
-        case "chats":
-          return buildChatsDisplay(snapshot, nav.highlightedIndex);
-        case "messages":
-          return buildMessagesDisplay(snapshot, nav.highlightedIndex);
-        case "messageDetail":
-          return buildMessageDetailDisplay(
-            snapshot,
-            snapshot.messageDetailImageTile &&
-              snapshot.messageDetailImageTile.messageId ===
-                snapshot.messages[snapshot.selectedMessageIndex]?.id
-              ? "loaded"
-              : snapshot.messageDetailImageStatus,
-          );
-        case "quickReply":
-          return buildQuickReplyDisplay(snapshot, nav.highlightedIndex);
-        case "voiceReply":
-          return buildVoiceReplyDisplay(snapshot);
-        default:
-          return [line("GazeChat", "inverted")];
+    (snapshot: AppState, _nav: GlassNavState): DisplayLine[] => {
+      // only "startup" still uses the toolkit text renderer; chats/messages
+      // render through the custom glasses path (renderChatsPage/renderMessagesPage)
+      if (snapshot.currentScreen === "startup") {
+        return buildStartupDisplay(snapshot.startupTick);
       }
+      return [line("GazeChat", "inverted")];
     },
     [],
   );
