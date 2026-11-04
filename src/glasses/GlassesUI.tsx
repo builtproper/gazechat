@@ -799,6 +799,7 @@ function fetchPump() {
     job.run().finally(() => { fetchActive--; fetchPump(); });
   }
 }
+function getActiveScheduledFetches(): number { return fetchActive; }
 function scheduleFetch<T>(prio: FetchPrio, work: () => Promise<T>): Promise<T> {
   return new Promise<T>((resolve, reject) => {
     fetchQueue.push({
@@ -838,9 +839,17 @@ async function getRawAvatarBitmap(assetUrl: string, token: string | undefined): 
       if (res.ok) {
         const blob = await res.blob();
         if (blob.size > 0) {
-          const bmp = await createImageBitmap(blob);
-          rawAvatarPut(assetUrl, bmp);
-          return bmp;
+          // decode → immediately downscale to the cell size: Beeper avatars
+          // are 640..1080px (4.7MB RGBA each); caching those would Jetsam-kill
+          // the iOS WebView. 56x56 = 12.5KB, 100 of them = 1.25MB.
+          const full = await createImageBitmap(blob);
+          const tmp = document.createElement("canvas");
+          tmp.width = AV; tmp.height = AV;
+          tmp.getContext("2d")!.drawImage(full, 0, 0, full.width, full.height, 0, 0, AV, AV);
+          full.close();
+          const small = await createImageBitmap(tmp);
+          rawAvatarPut(assetUrl, small);
+          return small;
         }
       }
     } catch (e) {
@@ -3454,6 +3463,9 @@ export function GlassesUI({
 
     const pollChats = async () => {
       if (isChatsPollInFlightRef.current) return;
+      // Gemini Q9: while all 3 asset slots are busy (avatar burst on page
+      // turns), skip this 5s tick instead of queueing behind them
+      if (getActiveScheduledFetches() >= FETCH_MAX) return;
       isChatsPollInFlightRef.current = true;
 
       try {
