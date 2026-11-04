@@ -30,8 +30,6 @@ import {
   type EvenHubEvent,
   ImageContainerProperty,
   ImageRawDataUpdate,
-  ListContainerProperty,
-  ListItemContainerProperty,
   RebuildPageContainer,
   MenuContainerProperty,
   MenuItemProperty,
@@ -68,16 +66,11 @@ import { imgLayout as imgLayoutFor, renderImageSlices } from "./imagePreview";
 // Font: 22px Courier New monospace (~12px per char)
 // Visible width: ~48 chars, but leaving padding, use 40 chars
 const DISPLAY_WIDTH = 60; // Max characters per line
-const DISPLAY_LINES = 8; // Max lines on Even G2 display (288px / ~40px per line)
+ // Max lines on Even G2 display (288px / ~40px per line)
 const SEPARATOR_LINE = "----------------------------------------"; // 40 dashes
 const GLASSES_DISPLAY_WIDTH = 576;
 const GLASSES_DISPLAY_HEIGHT = 288;
-const MESSAGE_MEDIA_IMAGE_WIDTH = 200;
-const MESSAGE_MEDIA_IMAGE_HEIGHT = 100;
-const MESSAGE_MEDIA_IMAGE_X = Math.floor(
-  (GLASSES_DISPLAY_WIDTH - MESSAGE_MEDIA_IMAGE_WIDTH) / 2,
-);
-const MESSAGE_MEDIA_IMAGE_Y = 0;
+
 const STARTUP_DELAY_MS = 1200; // Brief delay so OS registers the startup render
 const DEFAULT_BEEPER_BASE_URL = "http://localhost:23373";
 
@@ -97,7 +90,6 @@ const STORAGE_KEY = "even-messages-state";
 interface SavedState {
   selectedAccount: string | null;
   selectedChat: string | null;
-  chatScrollPosition?: number;
 }
 
 // Bridge instance for storage
@@ -116,67 +108,34 @@ async function getBridge(): Promise<EvenAppBridge | null> {
 
 // ASCII indicators (safe for glasses font)
 // Quick reply presets (2 columns x 4 rows = 8 replies)
-const QUICK_REPLIES = [
-  "Voice",
-  "Got it",
-  "OK",
-  "Thanks!",
-  "See you",
-  "On way",
-  "Call me",
-  "Busy",
-  "Later",
-];
 
-const QUICK_REPLY_CANCEL = "Cancel";
-const VOICE_NOT_CONFIGURED_STATUS = "Speech not configured in Settings";
+
+
+
 const MESSAGE_LOADING_HINT_DELAY_MS = 3000;
-const VOICE_MIC_UNAVAILABLE_STATUS = "Mic unavailable";
-const VOICE_TRANSCRIPTION_FAILED_STATUS = "Transcription failed";
-const VOICE_SENDING_STATUS = "Sending...";
-const VOICE_SEND_FAILED_STATUS = "Send failed - click to retry";
-const MESSAGE_DETAIL_REBUILD_MAX_CHARS = 950;
-const MESSAGE_DETAIL_UPGRADE_MAX_CHARS = 2000;
-const NATIVE_OVERLAY_EVENT_DEBOUNCE_MS = 250;
+
+
+
+
+
+
+
 const PCM_SAMPLE_RATE = 16000;
 const PCM_BITS_PER_SAMPLE = 16;
 const PCM_CHANNELS = 1;
 
-const NATIVE_REPLY_CONTAINER = {
-  QUICK_TITLE_ID: 201,
-  QUICK_LIST_ID: 202,
-  VOICE_CARD_ID: 211,
-  VOICE_SEND_ID: 212,
-  QUICK_TITLE_NAME: "reply-title",
-  QUICK_LIST_NAME: "reply-list",
-  VOICE_CARD_NAME: "voice-card",
-  VOICE_SEND_NAME: "voice-send",
-} as const;
 
-const MESSAGE_DETAIL_CONTAINER = {
-  TEXT_ID: 221,
-  TEXT_NAME: "message-detail-text",
-  IMAGE_ID: 223,
-  IMAGE_NAME: "message-media",
-  ACTION_LIST_ID: 222,
-  ACTION_LIST_NAME: "message-detail-actions",
-} as const;
 
-type MessageDetailImageTile = {
-  messageId: string;
-  url: string;
-  bytes: Uint8Array;
-};
 
-type MessageDetailImageStatus = "none" | "loading" | "loaded" | "failed";
 
-type MessageAttachmentRecord = NonNullable<
-  BeeperMessage["attachments"]
->[number] &
-  Record<string, unknown>;
 
-const messageMediaImageCache = new Map<string, Uint8Array>();
-const failedMessageMediaImageUrls = new Set<string>();
+
+
+
+
+
+
+
 
 // ═══════════════════════════════════════════════════════════════
 // PERSISTENCE (Using Even SDK Storage)
@@ -309,19 +268,13 @@ function sep(): DisplayLine {
 
 // Own messages often arrive with a raw bridge address like "@user:beeper.com"
 // as senderName — show a friendly "Me" instead.
-function senderLabel(msg: { isSender?: boolean; senderName?: string; senderID?: string }): string {
-  const name = (msg.senderName || "").trim()
-  if (msg.isSender || /^@[^:]+:beeper\.com$/i.test(name) || /^@[^:]+:beeper\.com$/i.test(msg.senderID || "")) {
-    return "Me"
-  }
-  return name
-}
+
 
 // ═══════════════════════════════════════════════════════════════
 // TYPES
 // ═══════════════════════════════════════════════════════════════
 
-type Screen = "startup" | "accounts" | "chats" | "messages" | "quickReply" | "voiceReply" | "messageDetail";
+type Screen = "startup" | "chats" | "messages";
 
 interface AppState {
   accounts: BeeperAccount[];
@@ -336,14 +289,6 @@ interface AppState {
   messageLoadingTimedOut: boolean;
   messageLoadFailed: boolean;
   setupRequired: boolean;
-  messageScrollOffset: number; // For scrolling through messages
-  messageDetailScrollOffset: number;
-  messageDetailImageTile: MessageDetailImageTile | null;
-  messageDetailImageStatus: MessageDetailImageStatus;
-  demoMode: boolean; // Easter egg: force demo mode with fake data
-  voiceStatus: string | null;
-  voiceTranscript: string;
-  voiceAudioBytes: number;
   startupTick: number; // drives the loading-box dot animation
 }
 
@@ -352,8 +297,8 @@ interface TranscriptionResponse {
 }
 
 // Demo mode trigger: 5 clicks within 1 second
-const DEMO_MODE_CLICKS = 5;
-const DEMO_MODE_WINDOW_MS = 1000;
+
+
 
 // ═══════════════════════════════════════════════════════════════
 // UTILITY FUNCTIONS
@@ -366,28 +311,7 @@ function padRight(text: string, len: number): string {
   return text.slice(0, len);
 }
 
-function truncate(text: string, max: number): string {
-  if (text.length <= max) return text;
-  return text.slice(0, max - 2) + "..";
-}
-
 // Truncate name: show first word + first letter of second word (if any)
-function truncateName(text: string, max: number): string {
-  if (text.length <= max) return text;
-
-  const words = text.split(" ");
-  if (words.length === 1) {
-    return words[0].slice(0, max);
-  }
-
-  // First word + first letter of second word
-  const first = words[0];
-  const second = words[1] ? words[1][0] : "";
-  const result = `${first} ${second}`.trim();
-
-  return result.slice(0, max);
-}
-
 // ── Pixel-accurate text metrics (G2 font is proportional) ──────────────────
 // Measured glyph widths (calibrated on real G2 firmware, KM app). Unknown
 // chars fall back to 11.7 (wide average) — safe overestimate for layout.
@@ -459,48 +383,15 @@ function formatTime(timestamp: string): string {
 }
 
 
-function wrapText(text: string, maxWidth: number): string[] {
-  const normalized = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-  const paragraphs = normalized.split("\n");
-  const lines: string[] = [];
 
-  for (const paragraph of paragraphs) {
-    if (!paragraph) {
-      lines.push("");
-      continue;
-    }
 
-    let remaining = paragraph;
-    while (remaining.length > maxWidth) {
-      let breakAt = remaining.lastIndexOf(" ", maxWidth);
-      if (breakAt <= 0) {
-        breakAt = maxWidth;
-      }
-      lines.push(remaining.slice(0, breakAt).trimEnd());
-      remaining = remaining.slice(breakAt).trimStart();
-    }
-    lines.push(remaining);
-  }
 
-  return lines.length > 0 ? lines : [""];
-}
-
-function getMessageDetailWrappedBody(msg: BeeperMessage): string[] {
-  const body = stripUnsupportedChars(formatMessageText(msg));
-  return wrapText(body, DISPLAY_WIDTH - 2);
-}
 
 function normalizeBeeperBaseUrl(baseUrl?: string): string {
   return (baseUrl || DEFAULT_BEEPER_BASE_URL).replace(/\/v1\/?$/, "").replace(/\/$/, "");
 }
 
-function getAttachmentString(
-  attachment: MessageAttachmentRecord,
-  key: string,
-): string | null {
-  const value = attachment[key];
-  return typeof value === "string" && value.trim() ? value : null;
-}
+
 
 function buildBeeperAssetUrl(baseUrl: string, assetUrl: string): string {
   if (!assetUrl) return "";
@@ -523,119 +414,15 @@ function buildBeeperAssetUrl(baseUrl: string, assetUrl: string): string {
   return assetUrl;
 }
 
-function isImageAttachment(
-  msg: BeeperMessage,
-  attachment: MessageAttachmentRecord,
-): boolean {
-  const messageType = String(msg.type || "").toUpperCase();
-  const attachmentType = getAttachmentString(attachment, "type")?.toUpperCase();
-  const mimeType = getAttachmentString(attachment, "mimeType")?.toLowerCase();
-  const filename = getAttachmentString(attachment, "filename")?.toLowerCase();
 
-  return (
-    messageType === "IMAGE" ||
-    messageType === "STICKER" ||
-    attachmentType === "IMAGE" ||
-    attachmentType === "STICKER" ||
-    !!mimeType?.startsWith("image/") ||
-    !!filename?.match(/\.(apng|avif|gif|jpe?g|png|webp)$/)
-  );
-}
 
-function getAttachmentImageUrl(
-  attachment: MessageAttachmentRecord,
-  baseUrl: string,
-): string | null {
-  const rawUrl =
-    getAttachmentString(attachment, "srcURL") ||
-    getAttachmentString(attachment, "srcUrl") ||
-    getAttachmentString(attachment, "url") ||
-    getAttachmentString(attachment, "thumbnailUrl") ||
-    getAttachmentString(attachment, "thumbnailURL") ||
-    getAttachmentString(attachment, "thumbnail_srcURL");
 
-  return rawUrl ? buildBeeperAssetUrl(baseUrl, rawUrl) : null;
-}
 
-function getMessageImageUrl(
-  msg: BeeperMessage,
-  baseUrl?: string,
-): string | null {
-  const attachments = msg.attachments as MessageAttachmentRecord[] | undefined;
-  if (!attachments?.length) {
-    return null;
-  }
 
-  const normalizedBaseUrl = normalizeBeeperBaseUrl(baseUrl);
-  for (const attachment of attachments) {
-    if (!isImageAttachment(msg, attachment)) {
-      continue;
-    }
 
-    const imageUrl = getAttachmentImageUrl(attachment, normalizedBaseUrl);
-    if (imageUrl) {
-      return imageUrl;
-    }
-  }
 
-  return null;
-}
 
-async function loadImageElement(url: string): Promise<HTMLImageElement> {
-  return new Promise((resolve, reject) => {
-    const img = new Image();
-    img.crossOrigin = "anonymous";
-    img.onload = () => resolve(img);
-    img.onerror = () => reject(new Error(`Failed to load image: ${url}`));
-    img.src = url;
-  });
-}
 
-async function loadMessageMediaImageBytes(url: string): Promise<Uint8Array> {
-  if (failedMessageMediaImageUrls.has(url)) {
-    throw new Error(`Skipping previously failed image: ${url}`);
-  }
-
-  const cached = messageMediaImageCache.get(url);
-  if (cached) {
-    return cached;
-  }
-
-  try {
-    const img = await loadImageElement(url);
-    if (!img.naturalWidth || !img.naturalHeight) {
-      throw new Error("Image decoded without dimensions");
-    }
-
-    const canvas = document.createElement("canvas");
-    const ctx = canvas.getContext("2d");
-    if (!ctx) {
-      throw new Error("Could not get canvas context");
-    }
-
-    canvas.width = MESSAGE_MEDIA_IMAGE_WIDTH;
-    canvas.height = MESSAGE_MEDIA_IMAGE_HEIGHT;
-    ctx.fillStyle = "#000000";
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-    const scale = Math.min(
-      canvas.width / img.naturalWidth,
-      canvas.height / img.naturalHeight,
-    );
-    const drawWidth = Math.max(1, Math.round(img.naturalWidth * scale));
-    const drawHeight = Math.max(1, Math.round(img.naturalHeight * scale));
-    const drawX = Math.floor((canvas.width - drawWidth) / 2);
-    const drawY = Math.floor((canvas.height - drawHeight) / 2);
-
-    ctx.drawImage(img, drawX, drawY, drawWidth, drawHeight);
-    const bytes = new Uint8Array(pngDataUrlToBytes(canvas.toDataURL("image/png")));
-    messageMediaImageCache.set(url, bytes);
-    return bytes;
-  } catch (e) {
-    failedMessageMediaImageUrls.add(url);
-    throw e;
-  }
-}
 
 function buildGlassesText(lines: DisplayLine[], fullwidth = true): string {
   const text = lines
@@ -657,7 +444,7 @@ function buildGlassesText(lines: DisplayLine[], fullwidth = true): string {
 // ── spine image: "GazeChat" wordmark (user-provided art, pre-rotated to
 // 33×144 grayscale PNG, imported as data URL and shipped as raw bytes) ──────
 import SPINE_PNG from "../assets/gazechat-spine.png";
-let chatProbeDone = false; // one-time API field probe (avatar/preview?)
+ // one-time API field probe (avatar/preview?)
 let spineBytes: number[] | null = null;
 async function getSpineBytes(): Promise<number[]> {
   if (spineBytes) return spineBytes;
@@ -1557,20 +1344,13 @@ function getMaxIndex(state: AppState, chatFilter: "normal" | "low" | "archived" 
   switch (state.currentScreen) {
     case "startup":
       return 0;
-    case "accounts": {
-      const uniqueAccounts = new Set(state.accounts.map((a) => a.accountID));
-      return Math.max(0, uniqueAccounts.size); // +1 for "All Chats" at index 0
-    }
     case "chats":
       // NOTE: no +1 anymore — the old "All Platforms" row at index 0 is gone;
       // returning length here let the cursor run onto a phantom row (02.11.)
       return Math.max(0, filterChats(state.chats, chatFilter).length - 1);
         case "messages":
           return Math.max(0, state.messages.length - 1);
-        case "quickReply":
-          return Math.max(0, QUICK_REPLIES.length - 1);
-        case "voiceReply":
-        case "messageDetail":
+        default:
           return 0;
   }
 }
@@ -1579,18 +1359,7 @@ function normalizeSpeechBaseUrl(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, "");
 }
 
-function mergeAudioChunks(chunks: Uint8Array[]): Uint8Array {
-  const totalLength = chunks.reduce((sum, chunk) => sum + chunk.length, 0);
-  const merged = new Uint8Array(totalLength);
-  let offset = 0;
 
-  for (const chunk of chunks) {
-    merged.set(chunk, offset);
-    offset += chunk.length;
-  }
-
-  return merged;
-}
 
 function writeAscii(view: DataView, offset: number, value: string): void {
   for (let index = 0; index < value.length; index += 1) {
@@ -1678,33 +1447,13 @@ function buildStartupDisplay(tick: number): DisplayLine[] {
   return lines;
 }
 
-function getSelectedSender(state: AppState): string {
-  const msg = state.messages[state.selectedMessageIndex];
-  return truncateName(senderLabel(msg ?? {}) || "Unknown", 20);
-}
 
-function buildQuickReplyItems(): string[] {
-  return [...QUICK_REPLIES, QUICK_REPLY_CANCEL].map((item) =>
-    truncate(stripUnsupportedChars(item), 64),
-  );
-}
 
-function buildVoiceCardContent(state: AppState): string {
-  const sender = getSelectedSender(state);
-  const transcript = stripUnsupportedChars(state.voiceTranscript.trim());
-  const status = stripUnsupportedChars(state.voiceStatus || "Speak now");
-  const body = transcript || status;
 
-  return truncate(`Voice reply\n${sender}\n\n${body}`, 950);
-}
 
-function buildMessageDetailContent(msg: BeeperMessage): string {
-  const sender = stripUnsupportedChars(senderLabel(msg) || msg.senderID || "Unknown");
-  const time = stripUnsupportedChars(formatTime(msg.timestamp));
-  const fullText = stripUnsupportedChars(formatMessageText(msg));
 
-  return `${sender}  ${time}\n\n${fullText}\n\nClick: Reply\nDouble click: Back`;
-}
+
+
 
 function areMessagesEqual(a: BeeperMessage[], b: BeeperMessage[]): boolean {
   if (a.length !== b.length) {
@@ -1730,181 +1479,13 @@ function areMessagesEqual(a: BeeperMessage[], b: BeeperMessage[]): boolean {
   return true;
 }
 
-function areChatsEqual(a: BeeperChat[], b: BeeperChat[]): boolean {
-  if (a.length !== b.length) {
-    return false;
-  }
-
-  for (let i = 0; i < a.length; i += 1) {
-    const left = a[i];
-    const right = b[i];
-    if (
-      left.id !== right.id ||
-      left.accountID !== right.accountID ||
-      left.title !== right.title ||
-      left.lastActivity !== right.lastActivity ||
-      left.unreadCount !== right.unreadCount ||
-      left.lastReadMessageSortKey !== right.lastReadMessageSortKey ||
-      left.isArchived !== right.isArchived ||
-      left.isMuted !== right.isMuted ||
-      left.isPinned !== right.isPinned
-    ) {
-      return false;
-    }
-  }
-
-  return true;
-}
-
 // ═══════════════════════════════════════════════════════════════
 // DEMO DATA
 // ═══════════════════════════════════════════════════════════════
 
-function getDemoChats(): BeeperChat[] {
-  return [
-    {
-      id: "1",
-      accountID: "whatsapp",
-      title: "Sample Chat",
-      type: "single",
-      participants: { items: [], hasMore: false, total: 2 },
-      lastActivity: new Date().toISOString(),
-      unreadCount: 2,
-      isArchived: false,
-      isMuted: false,
-      isPinned: false,
-    },
-    {
-      id: "2",
-      accountID: "whatsapp",
-      title: "Alice Smith",
-      type: "single",
-      participants: { items: [], hasMore: false, total: 2 },
-      lastActivity: new Date().toISOString(),
-      unreadCount: 0,
-      isArchived: false,
-      isMuted: false,
-      isPinned: false,
-    },
-    {
-      id: "3",
-      accountID: "whatsapp",
-      title: "Family Group",
-      type: "group",
-      participants: { items: [], hasMore: false, total: 8 },
-      lastActivity: new Date().toISOString(),
-      unreadCount: 5,
-      isArchived: false,
-      isMuted: false,
-      isPinned: true,
-    },
-    {
-      id: "4",
-      accountID: "signal",
-      title: "Work Team",
-      type: "group",
-      participants: { items: [], hasMore: false, total: 12 },
-      lastActivity: new Date().toISOString(),
-      unreadCount: 1,
-      isArchived: false,
-      isMuted: false,
-      isPinned: false,
-    },
-    {
-      id: "5",
-      accountID: "telegram",
-      title: "Bob Wilson",
-      type: "single",
-      participants: { items: [], hasMore: false, total: 2 },
-      lastActivity: new Date().toISOString(),
-      unreadCount: 0,
-      isArchived: false,
-      isMuted: false,
-      isPinned: false,
-    },
-    {
-      id: "6",
-      accountID: "whatsapp",
-      title: "Mom",
-      type: "single",
-      participants: { items: [], hasMore: false, total: 2 },
-      lastActivity: new Date().toISOString(),
-      unreadCount: 1,
-      isArchived: false,
-      isMuted: false,
-      isPinned: false,
-    },
-    {
-      id: "7",
-      accountID: "signal",
-      title: "Best Friend",
-      type: "single",
-      participants: { items: [], hasMore: false, total: 2 },
-      lastActivity: new Date().toISOString(),
-      unreadCount: 3,
-      isArchived: false,
-      isMuted: false,
-      isPinned: false,
-    },
-  ];
-}
 
-function getDemoMessages(): BeeperMessage[] {
-  return [
-    {
-      id: "1",
-      chatID: "1",
-      accountID: "demo",
-      senderID: "sample",
-      senderName: "Sample Chat",
-      timestamp: new Date(Date.now() - 3600000).toISOString(),
-      sortKey: "1",
-      type: "TEXT",
-      text: "Hey, are you coming tonight?",
-      isSender: false,
-      isUnread: false,
-    },
-    {
-      id: "2",
-      chatID: "1",
-      accountID: "demo",
-      senderID: "me",
-      senderName: "You",
-      timestamp: new Date(Date.now() - 3000000).toISOString(),
-      sortKey: "2",
-      type: "TEXT",
-      text: "Yes! Around 8pm",
-      isSender: true,
-      isUnread: false,
-    },
-    {
-      id: "3",
-      chatID: "1",
-      accountID: "demo",
-      senderID: "sample",
-      senderName: "Sample Chat",
-      timestamp: new Date(Date.now() - 1800000).toISOString(),
-      sortKey: "3",
-      type: "TEXT",
-      text: "Great! See you then",
-      isSender: false,
-      isUnread: false,
-    },
-    {
-      id: "4",
-      chatID: "1",
-      accountID: "demo",
-      senderID: "me",
-      senderName: "You",
-      timestamp: new Date(Date.now() - 600000).toISOString(),
-      sortKey: "4",
-      type: "TEXT",
-      text: "Thanks for invite!",
-      isSender: true,
-      isUnread: false,
-    },
-  ];
-}
+
+
 
 // ═══════════════════════════════════════════════════════════════
 // MAIN COMPONENT
@@ -1930,14 +1511,8 @@ export function GlassesUI({
     messageLoadingTimedOut: false,
     messageLoadFailed: false,
     setupRequired: false,
-    messageScrollOffset: 0,
-    messageDetailScrollOffset: 0,
-    messageDetailImageTile: null,
-    messageDetailImageStatus: "none",
-    demoMode: false,
-    voiceStatus: null,
-    voiceTranscript: "",
-    voiceAudioBytes: 0,
+
+
     startupTick: 0,
   });
 
@@ -1946,14 +1521,13 @@ export function GlassesUI({
     selectedAccount: null,
     selectedChat: null,
   });
-  const voiceAudioChunksRef = useRef<Uint8Array[]>([]);
-  const isVoiceRecordingRef = useRef<boolean>(false);
-  const isVoiceTranscribingRef = useRef<boolean>(false);
-  const isVoiceSendingRef = useRef<boolean>(false);
-  const isVoiceCancelledRef = useRef<boolean>(false);
+
+
+
+
+
   const evenHubUnsubscribeRef = useRef<(() => void) | null>(null);
-  const nativeOverlayEventUnsubscribeRef = useRef<(() => void) | null>(null);
-  const nativeOverlayScreenRef = useRef<Screen | null>(null);
+
 
   const messagesPollIntervalRef = useRef<ReturnType<typeof setInterval> | null>(
     null,
@@ -2032,254 +1606,19 @@ export function GlassesUI({
     stateRef.current = state;
   }, [state]);
 
-  const stopVoiceReply = useCallback(async (cancelled = false) => {
-    isVoiceCancelledRef.current = cancelled;
-    isVoiceRecordingRef.current = false;
+  
 
-    if (evenHubUnsubscribeRef.current) {
-      evenHubUnsubscribeRef.current();
-      evenHubUnsubscribeRef.current = null;
-    }
+  
 
-    const bridge = await getBridge();
-    if (bridge) {
-      try {
-        await bridge.audioControl(false);
-      } catch (e) {
-        console.warn("[GlassesUI] Failed to close microphone:", e);
-      }
-    }
-  }, []);
+  
 
-  const stopNativeOverlayEvents = useCallback(() => {
-    if (nativeOverlayEventUnsubscribeRef.current) {
-      nativeOverlayEventUnsubscribeRef.current();
-      nativeOverlayEventUnsubscribeRef.current = null;
-    }
-    nativeOverlayScreenRef.current = null;
-  }, []);
+  
 
-  const hideNativeOverlay = useCallback(async () => {
-    const hadOverlay =
-      nativeOverlayScreenRef.current !== null ||
-      nativeOverlayEventUnsubscribeRef.current !== null;
+  
 
-    stopNativeOverlayEvents();
+  
 
-    if (!hadOverlay) {
-      return;
-    }
-
-    const bridge = await getBridge();
-    if (!bridge) return;
-
-    try {
-      await bridge.rebuildPageContainer(
-        new RebuildPageContainer({
-          containerTotalNum: 0,
-          listObject: [],
-          textObject: [],
-          imageObject: [],
-        }),
-      );
-    } catch (e) {
-      console.warn("[GlassesUI] Failed to clear native overlay:", e);
-    }
-  }, [stopNativeOverlayEvents]);
-
-  const dismissVoiceReply = useCallback(async () => {
-    await stopVoiceReply(true);
-    await hideNativeOverlay();
-    setState((s) => ({
-      ...s,
-      currentScreen: "messages",
-      highlightedIndex: 0,
-      voiceStatus: null,
-      voiceTranscript: "",
-      voiceAudioBytes: 0,
-    }));
-  }, [hideNativeOverlay, stopVoiceReply]);
-
-  const submitVoiceReply = useCallback(async () => {
-    const transcript = state.voiceTranscript.trim();
-    if (!transcript || isVoiceSendingRef.current) {
-      return;
-    }
-
-    isVoiceSendingRef.current = true;
-    setState((s) => ({ ...s, voiceStatus: VOICE_SENDING_STATUS }));
-
-    // Start the API request without waiting for native bridge cleanup. Bridge
-    // calls can stall inside the Even WebView and previously made Send inert.
-    void stopVoiceReply(false);
-    const sent = await sendMessage(transcript);
-
-    if (sent) {
-      await hideNativeOverlay();
-      setState((s) => ({
-        ...s,
-        currentScreen: "messages",
-        highlightedIndex: 0,
-        voiceStatus: null,
-        voiceTranscript: "",
-        voiceAudioBytes: 0,
-      }));
-    } else {
-      setState((s) => ({
-        ...s,
-        currentScreen: "voiceReply",
-        voiceStatus: VOICE_SEND_FAILED_STATUS,
-      }));
-    }
-
-    isVoiceSendingRef.current = false;
-  }, [hideNativeOverlay, state.voiceTranscript, stopVoiceReply]);
-
-  const startVoiceReply = useCallback(async () => {
-    if (
-      !speechConfig?.baseUrl ||
-      !speechConfig?.token ||
-      !speechConfig?.model
-    ) {
-      setState((s) => ({
-        ...s,
-        currentScreen: "voiceReply",
-        voiceStatus: VOICE_NOT_CONFIGURED_STATUS,
-        voiceTranscript: "",
-        voiceAudioBytes: 0,
-      }));
-      return;
-    }
-
-    const bridge = await getBridge();
-    if (!bridge) {
-      setState((s) => ({
-        ...s,
-        currentScreen: "voiceReply",
-        voiceStatus: VOICE_MIC_UNAVAILABLE_STATUS,
-        voiceTranscript: "",
-        voiceAudioBytes: 0,
-      }));
-      return;
-    }
-
-    isVoiceCancelledRef.current = false;
-    isVoiceRecordingRef.current = true;
-    isVoiceTranscribingRef.current = false;
-    voiceAudioChunksRef.current = [];
-    setState((s) => ({
-      ...s,
-      currentScreen: "voiceReply",
-      voiceStatus: "Listening...",
-      voiceTranscript: "",
-      voiceAudioBytes: 0,
-    }));
-
-    try {
-      evenHubUnsubscribeRef.current = bridge.onEvenHubEvent(
-        (event: EvenHubEvent) => {
-          if (!event.audioEvent || !isVoiceRecordingRef.current) {
-            return;
-          }
-
-          const pcm = event.audioEvent.audioPcm;
-          const pcmLength = pcm?.length || 0;
-          if (pcmLength === 0) {
-            return;
-          }
-
-          voiceAudioChunksRef.current.push(new Uint8Array(pcm));
-          setState((s) => ({
-            ...s,
-            voiceAudioBytes: s.voiceAudioBytes + pcmLength,
-          }));
-        },
-      );
-
-      const audioOpened = await bridge.audioControl(true);
-      if (!audioOpened) {
-        throw new Error("EvenHub microphone request was rejected");
-      }
-    } catch (e) {
-      console.warn("[GlassesUI] Failed to open microphone:", e);
-      await stopVoiceReply(true);
-      setState((s) => ({
-        ...s,
-        currentScreen: "voiceReply",
-        voiceStatus: VOICE_MIC_UNAVAILABLE_STATUS,
-        voiceTranscript: "",
-        voiceAudioBytes: 0,
-      }));
-    }
-  }, [speechConfig, stopVoiceReply]);
-
-  const finishVoiceRecording = useCallback(async () => {
-    if (isVoiceTranscribingRef.current) {
-      return;
-    }
-
-    if (
-      !speechConfig?.baseUrl ||
-      !speechConfig?.token ||
-      !speechConfig?.model
-    ) {
-      setState((s) => ({
-        ...s,
-        currentScreen: "voiceReply",
-        voiceStatus: VOICE_NOT_CONFIGURED_STATUS,
-        voiceTranscript: "",
-        voiceAudioBytes: 0,
-      }));
-      return;
-    }
-
-    isVoiceTranscribingRef.current = true;
-    const audioChunks = voiceAudioChunksRef.current;
-    await stopVoiceReply(false);
-
-    if (audioChunks.length === 0) {
-      isVoiceTranscribingRef.current = false;
-      setState((s) => ({
-        ...s,
-        voiceStatus: "No audio captured",
-        voiceTranscript: "",
-      }));
-      return;
-    }
-
-    setState((s) => ({
-      ...s,
-      voiceStatus: "Transcribing...",
-      voiceTranscript: "",
-    }));
-
-    try {
-      const transcript = await transcribePcmAudio(
-        speechConfig,
-        mergeAudioChunks(audioChunks),
-      );
-      if (isVoiceCancelledRef.current) {
-        return;
-      }
-
-      setState((s) => ({
-        ...s,
-        voiceStatus: transcript ? "Ready to send" : "No speech detected",
-        voiceTranscript: transcript,
-      }));
-    } catch (e) {
-      console.warn("[GlassesUI] Failed to transcribe voice reply:", e);
-      if (!isVoiceCancelledRef.current) {
-        setState((s) => ({
-          ...s,
-          voiceStatus: VOICE_TRANSCRIPTION_FAILED_STATUS,
-          voiceTranscript: "",
-        }));
-      }
-    } finally {
-      isVoiceTranscribingRef.current = false;
-    }
-  }, [speechConfig, stopVoiceReply]);
+  
 
   // ═══════════ recorder state machine ═══════════
   const recCloseMic = useCallback(async () => {
@@ -2426,347 +1765,15 @@ export function GlassesUI({
     sendVoice: () => recSendVoice(), sendText: () => recSendTranscript(), cancel: () => recCancel(),
   };
 
-  const handleVoiceReplySelect = useCallback(() => {
-    const currentState = stateRef.current;
-    if (currentState.voiceTranscript.trim()) {
-      void submitVoiceReply();
-      return;
-    }
+  
 
-    if (isVoiceRecordingRef.current) {
-      void finishVoiceRecording();
-      return;
-    }
+  
 
-    if (
-      currentState.voiceStatus &&
-      currentState.voiceStatus !== VOICE_NOT_CONFIGURED_STATUS &&
-      currentState.voiceStatus !== "Transcribing..."
-    ) {
-      void startVoiceReply();
-    }
-  }, [finishVoiceRecording, startVoiceReply, submitVoiceReply]);
+  
 
-  const showQuickReplyOverlay = useCallback(async () => {
-    const bridge = await getBridge();
-    if (!bridge) return;
-
-    const sender = getSelectedSender(stateRef.current);
-    const quickReplyTitle = `Reply to ${sender}`;
-    const replyItems = buildQuickReplyItems();
-    const quickReplyTitleContainer = new TextContainerProperty({
-      containerID: NATIVE_REPLY_CONTAINER.QUICK_TITLE_ID,
-      containerName: NATIVE_REPLY_CONTAINER.QUICK_TITLE_NAME,
-      xPosition: 32,
-      yPosition: 22,
-      width: 512,
-      height: 34,
-      content: truncate(quickReplyTitle, 80),
-      borderWidth: 0,
-      paddingLength: 0,
-      isEventCapture: 0,
-    });
-    const quickReplyListItems = new ListItemContainerProperty({
-      itemCount: replyItems.length,
-      itemWidth: 0,
-      isItemSelectBorderEn: 1,
-      itemName: replyItems,
-    });
-    const quickReplyListContainer = new ListContainerProperty({
-      containerID: NATIVE_REPLY_CONTAINER.QUICK_LIST_ID,
-      containerName: NATIVE_REPLY_CONTAINER.QUICK_LIST_NAME,
-      xPosition: 24,
-      yPosition: 58,
-      width: 528,
-      height: 200,
-      borderWidth: 1,
-      borderColor: 15,
-      borderRadius: 8,
-      paddingLength: 8,
-      isEventCapture: 1,
-      itemContainer: quickReplyListItems,
-    });
-
-    const rebuildContainer = new RebuildPageContainer({
-      containerTotalNum: 2,
-      textObject: [quickReplyTitleContainer],
-      listObject: [quickReplyListContainer],
-      imageObject: [],
-    });
-
-    await bridge.rebuildPageContainer(rebuildContainer);
-
-    stopNativeOverlayEvents();
-    nativeOverlayScreenRef.current = "quickReply";
-    nativeOverlayEventUnsubscribeRef.current = bridge.onEvenHubEvent(
-      (event: EvenHubEvent) => {
-        if (nativeOverlayScreenRef.current !== "quickReply") {
-          return;
-        }
-
-        const action = mapGlassEvent(event);
-        if (action?.type === "GO_BACK") {
-          void hideNativeOverlay();
-          setState((s) => ({
-            ...s,
-            currentScreen: "messages",
-            highlightedIndex: 0,
-          }));
-          return;
-        }
-
-        if (!event.listEvent) {
-          return;
-        }
-
-        const selectedName = event.listEvent.currentSelectItemName;
-        if (!selectedName) {
-          return;
-        }
-        if (selectedName === QUICK_REPLY_CANCEL) {
-          void hideNativeOverlay();
-          setState((s) => ({
-            ...s,
-            currentScreen: "messages",
-            highlightedIndex: 0,
-          }));
-          return;
-        }
-
-        if (selectedName === "Voice") {
-          setState((s) => ({
-            ...s,
-            currentScreen: "voiceReply",
-            voiceStatus: "Starting mic...",
-            voiceTranscript: "",
-            voiceAudioBytes: 0,
-          }));
-          void startVoiceReply();
-          return;
-        }
-
-        void hideNativeOverlay();
-        sendMessage(selectedName);
-        setState((s) => ({
-          ...s,
-          currentScreen: "messages",
-          highlightedIndex: 0,
-        }));
-      },
-    );
-  }, [hideNativeOverlay, startVoiceReply, stopNativeOverlayEvents]);
-
-  const showVoiceReplyOverlay = useCallback(async () => {
-    const bridge = await getBridge();
-    if (!bridge) return;
-
-    const voiceContent = buildVoiceCardContent(state);
-    const showSend = state.voiceTranscript.trim().length > 0;
-    const containerTotalNum = showSend ? 2 : 1;
-    const voiceCardContainer = new TextContainerProperty({
-      containerID: NATIVE_REPLY_CONTAINER.VOICE_CARD_ID,
-      containerName: NATIVE_REPLY_CONTAINER.VOICE_CARD_NAME,
-      xPosition: 64,
-      yPosition: 28,
-      width: 448,
-      height: 180,
-      content: voiceContent,
-      borderWidth: 2,
-      borderColor: 15,
-      borderRadius: 10,
-      paddingLength: 14,
-      isEventCapture: showSend ? 0 : 1,
-    });
-    const sendButtonItems = new ListItemContainerProperty({
-      itemCount: 1,
-      itemWidth: 0,
-      isItemSelectBorderEn: 1,
-      itemName: ["Send"],
-    });
-    const sendButtonContainer = new ListContainerProperty({
-      containerID: NATIVE_REPLY_CONTAINER.VOICE_SEND_ID,
-      containerName: NATIVE_REPLY_CONTAINER.VOICE_SEND_NAME,
-      xPosition: 176,
-      yPosition: 218,
-      width: 224,
-      height: 42,
-      borderWidth: 1,
-      borderColor: 15,
-      borderRadius: 10,
-      paddingLength: 6,
-      isEventCapture: 1,
-      itemContainer: sendButtonItems,
-    });
-
-    const rebuildContainer = new RebuildPageContainer({
-      containerTotalNum,
-      textObject: [voiceCardContainer],
-      listObject: showSend ? [sendButtonContainer] : [],
-      imageObject: [],
-    });
-
-    await bridge.rebuildPageContainer(rebuildContainer);
-
-    stopNativeOverlayEvents();
-    nativeOverlayScreenRef.current = "voiceReply";
-    nativeOverlayEventUnsubscribeRef.current = bridge.onEvenHubEvent(
-      (event: EvenHubEvent) => {
-        if (nativeOverlayScreenRef.current !== "voiceReply") {
-          return;
-        }
-
-        const action = mapGlassEvent(event);
-        if (action?.type === "GO_BACK") {
-          void dismissVoiceReply();
-          return;
-        }
-
-        if (action?.type === "SELECT_HIGHLIGHTED") {
-          handleVoiceReplySelect();
-          return;
-        }
-
-        if (
-          event.listEvent &&
-          event.listEvent.currentSelectItemName === "Send"
-        ) {
-          void submitVoiceReply();
-        }
-      },
-    );
-  }, [dismissVoiceReply, handleVoiceReplySelect, state, stopNativeOverlayEvents, submitVoiceReply]);
-
-  const showMessageDetailOverlay = useCallback(async (msg: BeeperMessage) => {
-    const bridge = await getBridge();
-    if (!bridge) return;
-
-    const fullContent = truncate(
-      buildMessageDetailContent(msg),
-      MESSAGE_DETAIL_UPGRADE_MAX_CHARS,
-    );
-    const rebuildContent = truncate(
-      fullContent,
-      MESSAGE_DETAIL_REBUILD_MAX_CHARS,
-    );
-    const imageUrl = getMessageImageUrl(msg, beeperConfig?.baseUrl);
-    let imageBytes: Uint8Array | null = null;
-
-    if (imageUrl) {
-      try {
-        imageBytes = await loadMessageMediaImageBytes(imageUrl);
-      } catch (e) {
-        console.warn("[GlassesUI] Failed to load message image:", e);
-      }
-    }
-
-    const textContainer = new TextContainerProperty({
-      containerID: MESSAGE_DETAIL_CONTAINER.TEXT_ID,
-      containerName: MESSAGE_DETAIL_CONTAINER.TEXT_NAME,
-      xPosition: 0,
-      yPosition: 0,
-      width: GLASSES_DISPLAY_WIDTH,
-      height: GLASSES_DISPLAY_HEIGHT,
-      content: rebuildContent,
-      borderWidth: 0,
-      borderColor: 0,
-      borderRadius: 0,
-      paddingLength: 6,
-      isEventCapture: 1,
-    });
-
-    const rebuildContainer = new RebuildPageContainer({
-      containerTotalNum: imageBytes ? 2 : 1,
-      textObject: [textContainer],
-      listObject: [],
-      imageObject: imageBytes
-        ? [
-            new ImageContainerProperty({
-              containerID: MESSAGE_DETAIL_CONTAINER.IMAGE_ID,
-              containerName: MESSAGE_DETAIL_CONTAINER.IMAGE_NAME,
-              xPosition: MESSAGE_MEDIA_IMAGE_X,
-              yPosition: MESSAGE_MEDIA_IMAGE_Y,
-              width: MESSAGE_MEDIA_IMAGE_WIDTH,
-              height: MESSAGE_MEDIA_IMAGE_HEIGHT,
-            }),
-          ]
-        : [],
-    });
-
-    const rebuildOk = await bridge.rebuildPageContainer(rebuildContainer);
-    if (!rebuildOk) {
-      console.warn("[GlassesUI] Failed to build message detail overlay");
-      return;
-    }
-
-    if (imageBytes) {
-      try {
-        await bridge.updateImageRawData(
-          new ImageRawDataUpdate({
-            containerID: MESSAGE_DETAIL_CONTAINER.IMAGE_ID,
-            containerName: MESSAGE_DETAIL_CONTAINER.IMAGE_NAME,
-            imageData: imageBytes,
-          }),
-        );
-      } catch (e) {
-        console.warn("[GlassesUI] Failed to send message image:", e);
-      }
-    }
-
-    if (fullContent !== rebuildContent) {
-      const upgradeOk = await bridge.textContainerUpgrade(
-        new TextContainerUpgrade({
-          containerID: MESSAGE_DETAIL_CONTAINER.TEXT_ID,
-          containerName: MESSAGE_DETAIL_CONTAINER.TEXT_NAME,
-          contentOffset: 0,
-          contentLength: fullContent.length,
-          content: fullContent,
-        }),
-      );
-      if (!upgradeOk) {
-        console.warn("[GlassesUI] Failed to upgrade message detail text");
-      }
-    }
-
-    stopNativeOverlayEvents();
-    nativeOverlayScreenRef.current = "messageDetail";
-    const overlayOpenedAt = Date.now();
-    nativeOverlayEventUnsubscribeRef.current = bridge.onEvenHubEvent(
-      async (event: EvenHubEvent) => {
-        if (nativeOverlayScreenRef.current !== "messageDetail") {
-          return;
-        }
-
-        if (Date.now() - overlayOpenedAt < NATIVE_OVERLAY_EVENT_DEBOUNCE_MS) {
-          return;
-        }
-
-        const action = mapGlassEvent(event);
-        if (action?.type === "GO_BACK") {
-          await hideNativeOverlay();
-          setState((s) => ({ ...s, currentScreen: "messages" }));
-          return;
-        }
-
-        if (action?.type === "SELECT_HIGHLIGHTED") {
-          await hideNativeOverlay();
-          setState((s) => ({
-            ...s,
-            currentScreen: "quickReply",
-            highlightedIndex: 0,
-            selectedMessageIndex: s.messageScrollOffset,
-          }));
-          navRef.current = {
-            ...navRef.current,
-            highlightedIndex: 0,
-            screen: "quickReply",
-          };
-        }
-      },
-    );
-  }, [beeperConfig?.baseUrl, hideNativeOverlay, stopNativeOverlayEvents]);
+  
 
   // Demo mode: click timestamps tracked in onGlassAction
-  const clickTimestamps = useRef<number[]>([]);
 
   useEffect(() => {
     if (state.currentScreen !== "messages" || !state.isLoading) {
@@ -2827,7 +1834,6 @@ export function GlassesUI({
         ...s,
         selectedAccount: null, // unified chat list — no per-messenger sub-view
         selectedChat: savedState.selectedChat,
-        messageScrollOffset: savedState.chatScrollPosition || 0,
       }));
 
       // Then load data (startup screen stays visible).
@@ -3004,7 +2010,7 @@ export function GlassesUI({
 
   // Poll Beeper instead of relying on the desktop WebSocket.
   useEffect(() => {
-    if (!beeper || state.demoMode || !state.selectedChat) return;
+    if (!beeper || !state.selectedChat) return;
 
     const selectedChatId = state.selectedChat;
 
@@ -3013,9 +2019,6 @@ export function GlassesUI({
       isMessagesPollInFlightRef.current = true;
 
       try {
-        if (nativeOverlayScreenRef.current) {
-          return;
-        }
         if (stateRef.current.currentScreen !== "messages") {
           return;
         }
@@ -3048,10 +2051,10 @@ export function GlassesUI({
       }
       isMessagesPollInFlightRef.current = false;
     };
-  }, [beeper, state.demoMode, state.selectedChat]);
+  }, [beeper, state.selectedChat]);
 
   useEffect(() => {
-    if (!beeper || state.demoMode) return;
+    if (!beeper) return;
 
     const pollChats = async () => {
       if (isChatsPollInFlightRef.current) return;
@@ -3061,9 +2064,6 @@ export function GlassesUI({
       isChatsPollInFlightRef.current = true;
 
       try {
-        if (nativeOverlayScreenRef.current) {
-          return;
-        }
         // SPARING poll: only while sitting on page 1 / entry 1,
         // and the result is only STASHED — it gets applied when the user
         // pulls up at the top, never yanking the list around underneath them
@@ -3106,147 +2106,15 @@ export function GlassesUI({
       }
       isChatsPollInFlightRef.current = false;
     };
-  }, [beeper, state.demoMode, state.selectedAccount]);
+  }, [beeper, state.selectedAccount]);
 
   useEffect(() => {
     return () => {
-      stopVoiceReply(true);
+      void recCloseMic(); // close mic if a recording was active at unmount
     };
-  }, [stopVoiceReply]);
+  }, [recCloseMic]);
 
-  useEffect(() => {
-    if (state.currentScreen !== "messageDetail") {
-      if (state.messageDetailImageTile || state.messageDetailImageStatus !== "none") {
-        setState((s) =>
-          s.messageDetailImageTile || s.messageDetailImageStatus !== "none"
-            ? { ...s, messageDetailImageTile: null, messageDetailImageStatus: "none" }
-            : s,
-        );
-      }
-      return;
-    }
 
-    const msg = state.messages[state.selectedMessageIndex];
-    if (!msg) return;
-
-    const imageUrl = getMessageImageUrl(msg, beeperConfig?.baseUrl);
-    if (!imageUrl) {
-      if (state.messageDetailImageTile || state.messageDetailImageStatus !== "none") {
-        setState((s) =>
-          s.messageDetailImageTile || s.messageDetailImageStatus !== "none"
-            ? { ...s, messageDetailImageTile: null, messageDetailImageStatus: "none" }
-            : s,
-        );
-      }
-      return;
-    }
-
-    if (
-      state.messageDetailImageTile?.messageId === msg.id &&
-      state.messageDetailImageTile.url === imageUrl
-    ) {
-      return;
-    }
-
-    let cancelled = false;
-    setState((s) =>
-      s.messageDetailImageTile || s.messageDetailImageStatus !== "loading"
-        ? { ...s, messageDetailImageTile: null, messageDetailImageStatus: "loading" }
-        : s,
-    );
-
-    loadMessageMediaImageBytes(imageUrl)
-      .then((bytes) => {
-        if (cancelled) return;
-
-        setState((s) => {
-          const selected = s.messages[s.selectedMessageIndex];
-          if (s.currentScreen !== "messageDetail" || selected?.id !== msg.id) {
-            return s;
-          }
-
-          return bytes.length > 0
-            ? {
-                ...s,
-                messageDetailImageTile: {
-                  messageId: msg.id,
-                  url: imageUrl,
-                  bytes,
-                },
-                messageDetailImageStatus: "loaded",
-              }
-            : { ...s, messageDetailImageStatus: "failed" };
-        });
-      })
-      .catch((e) => {
-        if (!cancelled) {
-          console.warn("[GlassesUI] Failed to load message image:", e);
-          setState((s) => {
-            const selected = s.messages[s.selectedMessageIndex];
-            if (s.currentScreen !== "messageDetail" || selected?.id !== msg.id) {
-              return s;
-            }
-
-            return {
-              ...s,
-              messageDetailImageTile: null,
-              messageDetailImageStatus: "failed",
-            };
-          });
-        }
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [
-    beeperConfig?.baseUrl,
-    state.currentScreen,
-    state.messageDetailImageTile,
-    state.messages,
-    state.selectedMessageIndex,
-  ]);
-
-  useEffect(() => {
-    if (state.currentScreen === "quickReply") {
-      void showQuickReplyOverlay();
-      return;
-    }
-
-    if (state.currentScreen === "voiceReply") {
-      void showVoiceReplyOverlay();
-      return;
-    }
-
-    if (state.currentScreen === "messageDetail") {
-      const selectedMsg = state.messages[state.selectedMessageIndex];
-      if (selectedMsg) {
-        void showMessageDetailOverlay(selectedMsg);
-      }
-      return;
-    }
-
-    if (!nativeOverlayScreenRef.current) {
-      return;
-    }
-
-    void hideNativeOverlay();
-  }, [
-    hideNativeOverlay,
-    showMessageDetailOverlay,
-    showQuickReplyOverlay,
-    showVoiceReplyOverlay,
-    state.currentScreen,
-    state.selectedMessageIndex,
-    state.voiceStatus,
-    state.voiceTranscript,
-  ]);
-
-  useEffect(() => {
-    return () => {
-      stopNativeOverlayEvents();
-    };
-  }, [stopNativeOverlayEvents]);
 
   // Persist state changes to storage
   useEffect(() => {
@@ -3254,11 +2122,10 @@ export function GlassesUI({
       await saveState({
         selectedAccount: state.selectedAccount,
         selectedChat: state.selectedChat,
-        chatScrollPosition: state.messageScrollOffset,
       });
     };
     persistState();
-  }, [state.selectedAccount, state.selectedChat, state.messageScrollOffset]);
+  }, [state.selectedAccount, state.selectedChat]);
 
   // Handle selection
   // Note: highlightedIndex comes from nav state (useGlasses), not app state
@@ -3270,34 +2137,6 @@ export function GlassesUI({
         case "startup":
           // Ignore input while loading
           break;
-        case "accounts": {
-          // "All Chats" is index 0
-          if (highlightedIndex === 0) {
-            updates.selectedAccount = null;
-          } else {
-            // Find the account at this index
-            const seen = new Set<string>();
-            let itemIdx = 1;
-            for (const account of s.accounts) {
-              if (!seen.has(account.accountID)) {
-                seen.add(account.accountID);
-                if (itemIdx === highlightedIndex) {
-                  updates.selectedAccount = account.accountID;
-                  break;
-                }
-                itemIdx++;
-              }
-            }
-          }
-          updates.currentScreen = "chats";
-          updates.highlightedIndex = 0;
-          updates.isLoading = true;
-
-          // Load chats
-          void loadChats(updates.selectedAccount ?? null);
-          break;
-        }
-
         case "chats": {
           const shown = filterChats(s.chats, chatFilterRef.current);
           if (highlightedIndex < shown.length) {
@@ -3321,66 +2160,11 @@ export function GlassesUI({
           break;
         }
 
-        case "messages": {
-          const selectedMsg = s.messages[s.messageScrollOffset];
-          if (selectedMsg) {
-            updates.currentScreen = "messageDetail";
-            updates.selectedMessageIndex = s.messageScrollOffset;
-            updates.messageDetailScrollOffset = 0;
-            updates.messageDetailImageTile = null;
-            updates.messageDetailImageStatus = "none";
-            void showMessageDetailOverlay(selectedMsg);
-          }
-          break;
-        }
-
-        case "messageDetail": {
-          updates.currentScreen = "quickReply";
-          updates.highlightedIndex = 0;
-          updates.messageDetailScrollOffset = 0;
-          updates.messageDetailImageTile = null;
-          updates.messageDetailImageStatus = "none";
-          break;
-        }
-
-        case "quickReply": {
-          const selectedReply = QUICK_REPLIES[highlightedIndex];
-          if (!selectedReply) {
-            break;
-          }
-
-          if (selectedReply === "Voice") {
-            updates.currentScreen = "voiceReply";
-            updates.highlightedIndex = 0;
-            updates.voiceStatus = "Starting mic...";
-            updates.voiceTranscript = "";
-            updates.voiceAudioBytes = 0;
-            void startVoiceReply();
-            break;
-          }
-
-          sendMessage(selectedReply);
-          updates.currentScreen = "messages";
-          updates.highlightedIndex = 0;
-          break;
-        }
-
-        case "voiceReply": {
-          handleVoiceReplySelect();
-          updates.highlightedIndex = 0;
-          break;
-        }
       }
 
       return updates;
     },
-    [
-      beeper,
-      handleVoiceReplySelect,
-      startVoiceReply,
-      submitVoiceReply,
-      showMessageDetailOverlay,
-    ],
+    [beeper],
   );
 
   // Handle back
@@ -3392,133 +2176,23 @@ export function GlassesUI({
         case "startup":
           // Can't go back while loading
           break;
-        case "accounts":
-          // Can't go back
-          break;
         case "chats":
           // Root level: back is handled by the exit dialog in GO_BACK
           break;
         case "messages":
           updates.currentScreen = "chats";
           updates.selectedChat = null;
-          updates.messageScrollOffset = 0; // Reset scroll for next visit
           msgBlockRef.current = 0;
-          break;
-        case "messageDetail":
-          updates.currentScreen = "messages";
-          updates.messageDetailScrollOffset = 0;
-          updates.messageDetailImageTile = null;
-          updates.messageDetailImageStatus = "none";
-          break;
-        case "quickReply":
-          updates.currentScreen = "messages";
-          updates.voiceStatus = null;
-          updates.voiceTranscript = "";
-          updates.voiceAudioBytes = 0;
-          break;
-        case "voiceReply":
-          void dismissVoiceReply();
-          updates.voiceStatus = null;
-          updates.voiceTranscript = "";
-          updates.voiceAudioBytes = 0;
           break;
       }
 
       return updates;
     },
-    [dismissVoiceReply],
+    [],
   );
 
   // Load chats
-  async function loadChats(
-    accountId: string | null,
-    options?: { silent?: boolean; preserveExisting?: boolean },
-  ) {
-    if (!options?.silent) {
-      setState((s) => ({
-        ...s,
-        chats: options?.preserveExisting ? s.chats : [],
-        isLoading: true,
-        setupRequired: false,
-      }));
-    }
-
-    if (state.demoMode) {
-      const demoChats = getDemoChats();
-      setState((s) => {
-        const sameChats = areChatsEqual(s.chats, demoChats);
-        if (sameChats && s.isLoading === false) {
-          return s;
-        }
-
-        return {
-          ...s,
-          chats: demoChats,
-          isLoading: false,
-          setupRequired: false,
-        };
-      });
-      return;
-    }
-
-    const seq = ++chatCrawlSeq;
-    try {
-      if (!beeper) {
-        throw new Error("Beeper is not configured");
-      }
-
-      // ONE page (25) up front — the rest loads on demand at the bottom.
-      // (Eagerly crawling 75 tripped the gateway rate limit and raced the
-      // poll → the page count flickered and stalled at ~4 pages.)
-      const result = await beeper.listChats(
-        accountId ? { accountIDs: [accountId] } : undefined,
-      );
-      if (seq !== chatCrawlSeq) return;
-      chatCursorRef.current = result.cursor ?? null;
-      chatHasMoreRef.current = !!result.hasMore;
-      const finalChats = result.chats;
-      // PROBE (one-time): log the real fields the live API returns, so we know
-      // whether avatars (participants[].imgURL) and last-message previews exist.
-      if (!chatProbeDone && finalChats.length > 0) {
-        chatProbeDone = true;
-        const c: any = finalChats[0];
-        console.log("[probe] chat keys:", Object.keys(c).join(","));
-        console.log("[probe] chat.imgURL:", c.imgURL ?? "NONE");
-        console.log("[probe] chat.network:", c.network ?? "NONE");
-        console.log("[probe] preview.text:", c.preview?.text ? JSON.stringify(c.preview.text).slice(0, 120) : "NONE");
-        const p: any = c.participants?.items?.[0];
-        console.log("[probe] participant keys:", p ? Object.keys(p).join(",") : "NONE");
-        console.log("[probe] imgURL:", p?.imgURL ?? "NONE");
-      }
-      setState((st) => {
-        const sameChats = areChatsEqual(st.chats, finalChats);
-        const sameLoading = options?.silent ? true : st.isLoading === false;
-        const sameSetup = !st.setupRequired;
-        if (sameChats && sameLoading && sameSetup) return st;
-        return { ...st, chats: finalChats, isLoading: options?.silent ? st.isLoading : false, setupRequired: false };
-      });
-    } catch {
-      // a FAILED background poll must not wipe a populated list (that flashed
-      // "No chats" until the next poll restored it) — only an initial load
-      // with nothing on screen yet may show the setup-required state
-      if (seq !== chatCrawlSeq) return;
-      setState((s) => {
-        if (s.chats.length > 0) {
-          const sameLoading = options?.silent ? true : s.isLoading === false;
-          if (sameLoading && !s.setupRequired) return s;
-          return { ...s, isLoading: options?.silent ? s.isLoading : false };
-        }
-        const sameLoading = options?.silent ? true : s.isLoading === false;
-        const sameSetup = s.setupRequired;
-        if (sameLoading && sameSetup) return s;
-        return {
-          ...s,
-          isLoading: options?.silent ? s.isLoading : false,
-          setupRequired: true,
-        };
-      });
-    }
-  }
+  
 
   // fetch the next 25-chat page and append (lazy paging at the bottom)
   async function loadMoreChats() {
@@ -3593,36 +2267,6 @@ export function GlassesUI({
       }));
     }
 
-    if (state.demoMode) {
-      const demoMessages = getDemoMessages();
-      const initialScroll = Math.max(0, demoMessages.length - 1);
-
-      setState((s) => {
-        const nextScroll = options?.preserveScroll
-          ? Math.min(s.messageScrollOffset, initialScroll)
-          : initialScroll;
-        const sameMessages = areMessagesEqual(s.messages, demoMessages);
-        const sameLoading = s.isLoading === false;
-        const sameHighlight = options?.silent ? true : s.highlightedIndex === 0;
-        const sameScroll = s.messageScrollOffset === nextScroll;
-
-        if (sameMessages && sameLoading && sameHighlight && sameScroll) {
-          return s;
-        }
-
-        return {
-          ...s,
-          messages: demoMessages,
-          isLoading: false,
-          messageLoadingTimedOut: false,
-          messageLoadFailed: false,
-          setupRequired: false,
-          highlightedIndex: options?.silent ? s.highlightedIndex : 0,
-          messageScrollOffset: nextScroll,
-        };
-      });
-      return;
-    }
 
     try {
       if (!beeper) {
@@ -3656,18 +2300,12 @@ export function GlassesUI({
         const idx = finalMessages.findIndex((m) => m.id === focusId);
         if (idx >= 0) msgFocusRef.current = idx;
       }
-      const initialScroll = Math.max(0, finalMessages.length - 1);
-
       setState((s) => {
-        const nextScroll = options?.preserveScroll
-          ? Math.min(s.messageScrollOffset, initialScroll)
-          : initialScroll;
         const sameMessages = areMessagesEqual(s.messages, finalMessages);
         const sameLoading = options?.silent ? true : s.isLoading === false;
         const sameHighlight = options?.silent ? true : s.highlightedIndex === 0;
-        const sameScroll = s.messageScrollOffset === nextScroll;
 
-        if (sameMessages && sameLoading && sameHighlight && sameScroll) {
+        if (sameMessages && sameLoading && sameHighlight) {
           return s;
         }
 
@@ -3681,7 +2319,6 @@ export function GlassesUI({
           messageLoadFailed: false,
           setupRequired: false,
           highlightedIndex: options?.silent ? s.highlightedIndex : 0,
-          messageScrollOffset: nextScroll,
         };
       });
     } catch {
@@ -3788,43 +2425,8 @@ export function GlassesUI({
       nav: GlassNavState,
       snapshot: AppState,
     ): GlassNavState => {
-      // Native overlays manage their own input lifecycle. If we also let the
-      // toolkit bridge process the same gesture, actions like double-click/back
-      // get handled twice and the display can end up in an invalid state.
-      if (nativeOverlayScreenRef.current) {
-        return nav;
-      }
-
       switch (action.type) {
         case "HIGHLIGHT_MOVE": {
-          if (snapshot.currentScreen === "messageDetail") {
-            const msg = snapshot.messages[snapshot.selectedMessageIndex];
-            if (!msg) return nav;
-
-            const wrappedBody = getMessageDetailWrappedBody(msg);
-            const visibleLines = Math.max(0, DISPLAY_LINES - 4);
-            const maxScroll = Math.max(0, wrappedBody.length - visibleLines);
-            const currentScroll = Math.min(
-              snapshot.messageDetailScrollOffset,
-              maxScroll,
-            );
-
-            if (action.direction === "down" && currentScroll >= maxScroll) {
-              return nav;
-            }
-            if (action.direction === "up" && currentScroll <= 0) {
-              return nav;
-            }
-
-            const nextScroll =
-              currentScroll + (action.direction === "down" ? 1 : -1);
-            setState((s) => ({
-              ...s,
-              messageDetailScrollOffset: nextScroll,
-            }));
-            return nav;
-          }
-
           // Messages screen: focus starts on the mic; scrolling up moves the
           // focus message by message (full pages when paging back), down
           // returns toward the mic. Long/media messages page block by block.
@@ -4027,36 +2629,6 @@ export function GlassesUI({
             }
             return nav;
           }
-          // Track clicks for demo mode easter egg
-          const now = Date.now();
-          clickTimestamps.current.push(now);
-          clickTimestamps.current = clickTimestamps.current.filter(
-            (t) => now - t < DEMO_MODE_WINDOW_MS,
-          );
-
-          // Check for 5 rapid clicks to toggle demo mode
-          if (clickTimestamps.current.length >= DEMO_MODE_CLICKS) {
-            clickTimestamps.current = [];
-            setState((s) => {
-              const newDemoMode = !s.demoMode;
-              console.log(
-                `[GlassesUI] Demo mode ${newDemoMode ? "ENABLED" : "DISABLED"}`,
-              );
-              // Reset to the conversations list when toggling demo mode
-              return {
-                ...s,
-                demoMode: newDemoMode,
-                currentScreen: "chats",
-                selectedAccount: null,
-                selectedChat: null,
-                accounts: newDemoMode ? [] : s.accounts,
-                chats: newDemoMode ? [] : s.chats,
-                messages: newDemoMode ? [] : s.messages,
-              };
-            });
-            return nav;
-          }
-
           // Use ref to get latest handler and pass nav.highlightedIndex (source of truth)
           setState((s) => {
             const updates = handleSelectRef.current(s, nav.highlightedIndex);
@@ -4085,7 +2657,7 @@ export function GlassesUI({
           // Even Hub submission requirement: root-page double-tap must show
           // the native exit dialogue. See page-lifecycle.md.
           // The unified chat list is the root screen now.
-          if (snapshot.currentScreen === "chats" || snapshot.currentScreen === "accounts") {
+          if (snapshot.currentScreen === "chats") {
             void getBridge().then((b) => b?.shutDownPageContainer(1));
             return nav;
           }
@@ -4719,10 +3291,6 @@ export function GlassesUI({
       return;
     }
 
-    if (nativeOverlayScreenRef.current) {
-      return;
-    }
-
     if (isRenderingGlassesRef.current) {
       pendingGlassesRenderRef.current = true;
       return;
@@ -4858,10 +3426,6 @@ export function GlassesUI({
           }
         });
         unsubscribe = bridge.onEvenHubEvent((event: EvenHubEvent) => {
-          if (nativeOverlayScreenRef.current) {
-            return;
-          }
-
           // Even's built-in context menu: chat list filters. The bridge
           // delivers menu clicks as raw {jsonData:{itemID}} on this SDK path.
           const menuId = event.menuItemClickEvent?.itemID ?? (event as any).jsonData?.itemID;
