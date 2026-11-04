@@ -23,7 +23,6 @@ import { useCallback, useEffect, useState, useRef } from "react";
 
 import { buildHeaderLine } from "even-toolkit/text-utils";
 import { line } from "even-toolkit/types";
-import { useGlasses } from "even-toolkit/useGlasses";
 import {
   CreateStartUpPageContainer,
   waitForEvenAppBridge,
@@ -79,7 +78,6 @@ const MESSAGE_MEDIA_IMAGE_X = Math.floor(
   (GLASSES_DISPLAY_WIDTH - MESSAGE_MEDIA_IMAGE_WIDTH) / 2,
 );
 const MESSAGE_MEDIA_IMAGE_Y = 0;
-const ENABLE_CUSTOM_GLASSES_RENDERER = true;
 const STARTUP_DELAY_MS = 1200; // Brief delay so OS registers the startup render
 const DEFAULT_BEEPER_BASE_URL = "http://localhost:23373";
 
@@ -3210,13 +3208,6 @@ export function GlassesUI({
   ]);
 
   useEffect(() => {
-    if (!ENABLE_CUSTOM_GLASSES_RENDERER) {
-      if (nativeOverlayScreenRef.current) {
-        void hideNativeOverlay();
-      }
-      return;
-    }
-
     if (state.currentScreen === "quickReply") {
       void showQuickReplyOverlay();
       return;
@@ -3338,9 +3329,7 @@ export function GlassesUI({
             updates.messageDetailScrollOffset = 0;
             updates.messageDetailImageTile = null;
             updates.messageDetailImageStatus = "none";
-            if (ENABLE_CUSTOM_GLASSES_RENDERER) {
-              void showMessageDetailOverlay(selectedMsg);
-            }
+            void showMessageDetailOverlay(selectedMsg);
           }
           break;
         }
@@ -4111,36 +4100,6 @@ export function GlassesUI({
     [], // Empty deps - we use refs to access latest handlers
   );
 
-  const toDisplayData = useCallback(
-    (snapshot: AppState, nav: GlassNavState) => ({
-      lines: getDisplayLines(snapshot, nav),
-    }),
-    [getDisplayLines],
-  );
-
-  const getPageMode = useCallback(
-    (_screen: string): "text" | "home" =>
-      stateRef.current.currentScreen === "messageDetail" &&
-      stateRef.current.messageDetailImageTile
-        ? "home"
-        : "text",
-    [],
-  );
-
-  const homeImageTiles = state.messageDetailImageTile
-    && state.messageDetailImageTile.bytes.length > 0
-    ? [
-        {
-          id: MESSAGE_DETAIL_CONTAINER.IMAGE_ID,
-          name: MESSAGE_DETAIL_CONTAINER.IMAGE_NAME,
-          bytes: state.messageDetailImageTile.bytes,
-          x: MESSAGE_MEDIA_IMAGE_X,
-          y: MESSAGE_MEDIA_IMAGE_Y,
-          w: MESSAGE_MEDIA_IMAGE_WIDTH,
-          h: MESSAGE_MEDIA_IMAGE_HEIGHT,
-        },
-      ]
-    : undefined;
 
   const ensureGlassesStartup = useCallback(async (bridge: EvenAppBridge) => {
     if (glassesInitializedRef.current) {
@@ -4878,9 +4837,6 @@ export function GlassesUI({
   }, [state, navVersion, flushGlassesDisplay]);
 
   useEffect(() => {
-    if (!ENABLE_CUSTOM_GLASSES_RENDERER) {
-      return;
-    }
     let disposed = false;
     let unsubscribe: (() => void) | null = null;
 
@@ -5000,69 +4956,10 @@ export function GlassesUI({
     };
   }, [ensureGlassesStartup, flushGlassesDisplay, onGlassAction]);
 
-  if (!ENABLE_CUSTOM_GLASSES_RENDERER) {
-    return (
-      <ToolkitGlassesBridge
-        state={state}
-        currentScreen={state.currentScreen}
-        toDisplayData={toDisplayData}
-        onGlassAction={onGlassAction}
-        getPageMode={getPageMode}
-        homeImageTiles={homeImageTiles}
-      />
-    );
-  }
 
   // This is a headless component - renders nothing in DOM
   return null;
 }
 
-function ToolkitGlassesBridge({
-  state,
-  currentScreen,
-  toDisplayData,
-  onGlassAction,
-  getPageMode,
-  homeImageTiles,
-}: {
-  state: AppState;
-  currentScreen: Screen;
-  toDisplayData: (
-    snapshot: AppState,
-    nav: GlassNavState,
-  ) => { lines: DisplayLine[] };
-  onGlassAction: (
-    action: GlassAction,
-    nav: GlassNavState,
-    snapshot: AppState,
-  ) => GlassNavState;
-  getPageMode: (screen: string) => "text" | "home";
-  homeImageTiles?: {
-    id: number;
-    name: string;
-    bytes: Uint8Array;
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-  }[];
-}) {
-  const deriveScreen = useCallback(
-    (_path: string) => currentScreen,
-    [currentScreen],
-  );
-
-  useGlasses({
-    getSnapshot: () => state,
-    toDisplayData,
-    onGlassAction,
-    deriveScreen,
-    appName: "even-messages",
-    getPageMode,
-    homeImageTiles,
-  });
-
-  return null;
-}
 
 export default GlassesUI;
