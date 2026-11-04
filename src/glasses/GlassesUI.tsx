@@ -2370,6 +2370,7 @@ export function GlassesUI({
   const previousScreenRef = useRef<Screen>(state.currentScreen);
   // cursor position in the chat list when a chat was opened — restored on back
   const chatListIndexRef = useRef<number>(0);
+  const chatListAnchorIdRef = useRef<string | null>(null);
   const glassesBridgeRef = useRef<EvenAppBridge | null>(null);
   const glassesInitializedRef = useRef<boolean>(false);
   const glassesLayoutRef = useRef<"text" | "chats" | "messages" | null>(null);
@@ -2776,10 +2777,14 @@ export function GlassesUI({
       // type" on the bridge)
       const ogg = await pcmToOggOpusBlob(pcm);
       const b64 = await blobToBase64(ogg);
-      const uploadID = await beeper.uploadAssetBase64(b64, "voice-message.ogg", "audio/ogg; codecs=opus");
+      const up = await beeper.uploadAssetBase64(b64, "voice-message.ogg", "audio/ogg; codecs=opus");
+      // duration: Beeper's own media probe (matches the OGG granulepos 1:1),
+      // fallback = exact recorded sample count (NOT recSeconds(): the mic
+      // opens ~200-500ms after the tap, so wall-clock overshoots the audio)
+      const dur = up.duration ?? Math.round(pcm.byteLength / 32000);
       await beeper.sendAttachment(chat, {
-        uploadID, type: "voice-note", mimeType: "audio/ogg; codecs=opus",
-        fileName: "voice-message.ogg", duration: recSeconds(),
+        uploadID: up.uploadID, type: "voice-note", mimeType: "audio/ogg; codecs=opus",
+        fileName: "voice-message.ogg", duration: dur,
       });
       // same post-send housekeeping as text sends
       suppressReloadRef.current = true;
@@ -5250,9 +5255,21 @@ export function GlassesUI({
         gcSaveDraftNow(); // leaving the chat → persist compose as draft
       }
       // remember the list cursor when diving into a chat; put it back when
-      // returning (page derives from the index, so the page is restored too)
+      // returning (page derives from the index, so the page is restored too).
+      // The cursor anchors to the OPENED chat's id: answering bumps it to #0
+      // and landing there is the intuitive spot; reading-only keeps the exact
+      // row even if new chats pushed it down. Index is the fallback.
       if (previousScreenRef.current === "chats" && state.currentScreen === "messages") {
         chatListIndexRef.current = navRef.current.highlightedIndex;
+        chatListAnchorIdRef.current = state.selectedChat;
+      }
+      if (previousScreenRef.current === "messages" && state.currentScreen === "chats") {
+        const anchor = chatListAnchorIdRef.current;
+        if (anchor) {
+          const list = filterChats(state.chats, chatFilterRef.current);
+          const idx = list.findIndex((c: { id: string }) => c.id === anchor);
+          if (idx >= 0) chatListIndexRef.current = idx;
+        }
       }
       navRef.current = {
         highlightedIndex: state.currentScreen === "chats" ? chatListIndexRef.current : 0,

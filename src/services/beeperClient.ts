@@ -519,7 +519,7 @@ export class BeeperClient {
    * Upload base64-encoded file content → uploadID (for voice notes etc.).
    * Beeper: POST /v1/assets/upload/base64 {content, fileName, mimeType}.
    */
-  async uploadAssetBase64(content: string, fileName: string, mimeType: string): Promise<string> {
+  async uploadAssetBase64(content: string, fileName: string, mimeType: string): Promise<{ uploadID: string; duration?: number }> {
     const response = await fetch(`${this.baseUrl}/v1/assets/upload/base64`, {
       method: 'POST',
       headers: this.headers,
@@ -531,7 +531,7 @@ export class BeeperClient {
     }
     const json = await response.json()
     if (!json.uploadID) throw new Error('Upload returned no uploadID')
-    return json.uploadID
+    return { uploadID: json.uploadID, duration: typeof json.duration === 'number' ? json.duration : undefined }
   }
 
   /**
