@@ -1004,9 +1004,13 @@ function computeMsgLayout(
   block: number,
   loading = false,
   focusIdx = -1,
+  failed = false,
 ): { focus: boolean; items: MsgItem[] } {
   if (messages.length === 0) {
-    return { focus: false, items: [{ msg: {} as BeeperMessage, lines: [loading ? "Loading messages..." : "No messages yet - send one!"], block: 0, blocks: 1 }] };
+    const hint = loading ? "Loading messages..."
+      : failed ? "Couldn't load messages - open again"
+      : "No messages yet - send one!";
+    return { focus: false, items: [{ msg: {} as BeeperMessage, lines: [hint], block: 0, blocks: 1 }] };
   }
   let fi = focusIdx >= 0 ? Math.min(focusIdx, messages.length - 1) : -1;
   // mic focus on a chat whose NEWEST message is oversized → show that message
@@ -2912,7 +2916,7 @@ export function GlassesUI({
       msgIsGroup = (chat as { type?: string } | undefined)?.type === "group";
       const chatName = chat ? truncatePx(chat.title, 300) : "Messages";
       const focus = Math.min(msgFocusRef.current, Math.max(0, snapshot.messages.length - 1));
-      let layout = computeMsgLayout(snapshot.messages, msgBlockRef.current, snapshot.isLoading, focus);
+      let layout = computeMsgLayout(snapshot.messages, msgBlockRef.current, snapshot.isLoading, focus, snapshot.messageLoadFailed);
       if (recGetState() === "review") {
         // big bordered field where messages normally are: the transcript
         // (truncated to the page — scroll toggles the send options instead)
@@ -2942,9 +2946,9 @@ export function GlassesUI({
         if (!it) return { bubble: " ", time: " ", y: MSG_AREA_Y, h: 40, th: 40, timeY: MSG_AREA_Y, bx: 0, tx: 0, isMine: false, bright: 3, show: false };
         const isMine = !!it.msg.isSender;
         const isVid = layout.focus && (it.msg.type || "").toUpperCase() === "VIDEO";
-          const tag = msgDateTag(it.msg.timestamp);
+          const tag = it.msg.timestamp ? msgDateTag(it.msg.timestamp) : "";
         const rx = reactionText(it.msg);
-        const tstr = formatTime(it.msg.timestamp);
+        const tstr = it.msg.timestamp ? formatTime(it.msg.timestamp) : "";
         const head = tag ? `${tag} ${tstr}` : tstr;
         const focused = focus === slotIdx[i];
         // focus marker = trailing space (firmware ignores textColor on
