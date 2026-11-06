@@ -554,6 +554,36 @@ export class BeeperClient {
   }
 
   /**
+   * Add a reaction (emoji) to a message. Beeper: POST
+   * /v1/chats/{chatID}/messages/{messageID}/reactions {reactionKey}.
+   */
+  async addReaction(chatID: string, messageID: string, reactionKey: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/v1/chats/${encodeURIComponent(chatID)}/messages/${encodeURIComponent(messageID)}/reactions`,
+      { method: 'POST', headers: this.headers, body: JSON.stringify({ reactionKey }) },
+    )
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).trim() || response.statusText
+      throw new Error(`Add reaction failed (${response.status}): ${detail}`)
+    }
+  }
+
+  /**
+   * Remove our own reaction from a message. Beeper: DELETE
+   * /v1/chats/{chatID}/messages/{messageID}/reactions/{reactionKey}.
+   */
+  async removeReaction(chatID: string, messageID: string, reactionKey: string): Promise<void> {
+    const response = await fetch(
+      `${this.baseUrl}/v1/chats/${encodeURIComponent(chatID)}/messages/${encodeURIComponent(messageID)}/reactions/${encodeURIComponent(reactionKey)}`,
+      { method: 'DELETE', headers: this.headers },
+    )
+    if (!response.ok) {
+      const detail = (await response.text().catch(() => '')).trim() || response.statusText
+      throw new Error(`Remove reaction failed (${response.status}): ${detail}`)
+    }
+  }
+
+  /**
    * Search chats
    */
   async searchChats(query: string): Promise<BeeperChat[]> {

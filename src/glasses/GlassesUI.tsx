@@ -1140,12 +1140,25 @@ function recRefreshInput() {
   }));
 }
 
+// ── reaction picker (long-press, Joel 04.11.) ──
+// Yellow-standard emoji WITHOUT skin-tone modifiers. The firmware renders
+// 👍/❤/😀 as glyphs (device-verified); the rest will show as gaps if the
+// font lacks them — drop those from this list once reported.
+const REACT_EMOJIS = ["\u{1F44D}", "\u{1F44E}", "\u{1F642}", "\u{1F604}", "\u{1F605}", "\u2764", "\u{1F44B}"];
+let reactPick: { msgId: string; option: number } | null = null;
+function reactLine(): string | null {
+  if (!reactPick) return null;
+  return REACT_EMOJIS
+    .map((e, i) => (i === reactPick!.option ? "\u25B6" + e : " " + e))
+    .join(" ");
+}
+
 /** What the input container should show right now (recorder wins over compose). */
 function inputContent(): string {
-  return recInputLine() ?? (composeText ? composeWindow() : inputHint());
+  return reactLine() ?? recInputLine() ?? (composeText ? composeWindow() : inputHint());
 }
 function inputBright(): number {
-  return recActive() || composeText ? 4 : 0;
+  return reactPick || recActive() || composeText ? 4 : 0;
 }
 
 let composePoll: ReturnType<typeof setInterval> | null = null;
@@ -1699,6 +1712,27 @@ export function GlassesUI({
       recShowError("Send failed: " + why);
     }
   }, [beeper, loadMessages, recAfterSend]);
+
+  const sendReaction = useCallback(async (msgId: string, emoji: string) => {
+    const chat = stateRef.current.selectedChat;
+    if (!beeper || !chat) return;
+    try {
+      await beeper.addReaction(chat, msgId, emoji);
+      // optimistic: stamp the reaction onto the local message so the marker
+      // shows immediately; the next poll reconciles for real
+      setState((st) => ({
+        ...st,
+        messages: st.messages.map((m) =>
+          m.id === msgId
+            ? { ...m, reactions: [...((m as any).reactions || []), { reactionKey: emoji }] }
+            : m),
+      }));
+      msgSigRef.current = ""; // force re-render so the marker appears
+      void flushGlassesDisplay();
+    } catch (e) {
+      console.warn("[react] add failed:", String(e).slice(0, 140));
+    }
+  }, [beeper]);
 
   const recCancel = useCallback(async () => {
     if (!recActive()) return;
@@ -2374,6 +2408,25 @@ export function GlassesUI({
       nav: GlassNavState,
       snapshot: AppState,
     ): GlassNavState => {
+      // reaction picker open: scroll walks the emoji, tap sends, double-tap
+      // closes — everything else is swallowed so the chat flow is untouched
+      if (reactPick) {
+        if (action.type === "HIGHLIGHT_MOVE") {
+          const n = REACT_EMOJIS.length;
+          reactPick.option = (reactPick.option + (action.direction === "down" ? 1 : n - 1)) % n;
+          recRefreshInput();
+        } else if (action.type === "SELECT_HIGHLIGHTED") {
+          const emoji = REACT_EMOJIS[reactPick.option];
+          const msgId = reactPick.msgId;
+          reactPick = null;
+          recRefreshInput();
+          void sendReaction(msgId, emoji);
+        } else if (action.type === "GO_BACK") {
+          reactPick = null;
+          recRefreshInput();
+        }
+        return nav;
+      }
       switch (action.type) {
         case "HIGHLIGHT_MOVE": {
           // Messages screen: focus starts on the mic; scrolling up moves the
@@ -3323,6 +3376,7 @@ export function GlassesUI({
   useEffect(() => {
     if (previousScreenRef.current !== state.currentScreen) {
       if (previousScreenRef.current === "messages" && state.currentScreen !== "messages") {
+        reactPick = null; // picker dies with the chat view
         if (recActive()) void recFnRef.current?.cancel();
         unloadVideo();
         unloadVoice();
@@ -3426,6 +3480,21 @@ export function GlassesUI({
               navRef.current = { ...navRef.current, highlightedIndex: 0 };
               setNavVersion((v) => v + 1);
               void flushGlassesDisplay();
+            }
+            return;
+          }
+
+          // long-press (sysEvent 9) opens the reaction picker on the focused
+          // message; mapGlassEvent discards these, so intercept the raw event
+          const sysEv = (event as any).sysEvent ?? (event as any).jsonData;
+          if (sysEv && sysEv.eventType === 9) {
+            const snap = stateRef.current;
+            if (snap.currentScreen === "messages" && !recActive() && msgFocusRef.current >= 0) {
+              const m = snap.messages[Math.min(msgFocusRef.current, snap.messages.length - 1)];
+              if (m && m.id) {
+                reactPick = { msgId: m.id, option: 0 };
+                recRefreshInput();
+              }
             }
             return;
           }
