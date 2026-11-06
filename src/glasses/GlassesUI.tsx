@@ -1440,7 +1440,12 @@ function areMessagesEqual(a: BeeperMessage[], b: BeeperMessage[]): boolean {
       left.text !== right.text ||
       left.senderName !== right.senderName ||
       left.isSender !== right.isSender ||
-      left.type !== right.type
+      left.type !== right.type ||
+      // reactions live on the message: without this a poll never propagates
+      // an added/removed reaction and stale markers linger forever
+      (((left as any).reactions?.length ?? 0) !== ((right as any).reactions?.length ?? 0) ||
+       ((left as any).reactions ?? []).map((r: any) => r.reactionKey).join(",") !==
+       ((right as any).reactions ?? []).map((r: any) => r.reactionKey).join(","))
     ) {
       return false;
     }
@@ -1717,9 +1722,10 @@ export function GlassesUI({
 
   const sendReaction = useCallback(async (msgId: string, emoji: string) => {
     const chat = stateRef.current.selectedChat;
-    if (!beeper || !chat) return;
+    const client = beeperRef.current; // NOT the captured `beeper`: onGlassAction
+    if (!client || !chat) return;     // has empty deps → first-render closure
     try {
-      await beeper.addReaction(chat, msgId, emoji);
+      await client.addReaction(chat, msgId, emoji);
       // optimistic: stamp the reaction onto the local message so the marker
       // shows immediately; the next poll reconciles for real
       setState((st) => ({
@@ -1738,9 +1744,10 @@ export function GlassesUI({
 
   const removeMyReaction = useCallback(async (msgId: string, key: string) => {
     const chat = stateRef.current.selectedChat;
-    if (!beeper || !chat) return;
+    const client = beeperRef.current;
+    if (!client || !chat) return;
     try {
-      await beeper.removeReaction(chat, msgId, key);
+      await client.removeReaction(chat, msgId, key);
       setState((st) => ({
         ...st,
         messages: st.messages.map((m) => m.id === msgId
