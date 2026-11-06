@@ -1724,6 +1724,9 @@ export function GlassesUI({
     const chat = stateRef.current.selectedChat;
     const client = beeperRef.current; // NOT the captured `beeper`: onGlassAction
     if (!client || !chat) return;     // has empty deps → first-render closure
+    // self id so the optimistic reaction is recognised as "mine" immediately
+    const c = stateRef.current.chats.find((x: any) => x.id === chat);
+    const me = (c?.participants?.items || []).find((x: any) => x.isSelf)?.id as string | undefined;
     try {
       await client.addReaction(chat, msgId, emoji);
       // optimistic: stamp the reaction onto the local message so the marker
@@ -1732,7 +1735,8 @@ export function GlassesUI({
         ...st,
         messages: st.messages.map((m) =>
           m.id === msgId
-            ? { ...m, reactions: [...((m as any).reactions || []), { reactionKey: emoji }] }
+            ? { ...m, reactions: [...((m as any).reactions || []),
+                { reactionKey: emoji, participantID: me, id: me }] }
             : m),
       }));
       msgSigRef.current = ""; // force re-render so the marker appears
