@@ -81,6 +81,7 @@ function pushBar() {
 
 export function recStart(tick: () => void) {
   state = "recording";
+  frozenSec = 0;
   chunks = [];
   totalBytes = 0;
   bars = [];
@@ -113,6 +114,7 @@ export function recHalt() {
 
 export function recReset() {
   recHalt();
+  frozenSec = 0;
   state = "idle";
   chunks = [];
   totalBytes = 0;

@@ -37,15 +37,17 @@ export function setVoiceSpeed(s: number) {
 
 /** Fetch the voice note (caller resolves the authed asset URL), load it
  *  hidden, wait for metadata. Returns false if superseded or failed. */
+let loadToken = 0;
 export async function loadVoice(url: string, id: string, headers?: Record<string, string>, autoplay = false): Promise<boolean> {
   unloadVoice();
+  const token = ++loadToken;
   msgId = id;
   pendingPlay = autoplay;
   try {
     const res = await fetch(url, headers ? { headers } : undefined);
-    if (!res.ok) return false;
+    if (!res.ok) { if (token === loadToken) unloadVoice(); return false; }
     const blob = await res.blob();
-    if (msgId !== id) return false;
+    if (msgId !== id || token !== loadToken) return false;
     objUrl = URL.createObjectURL(blob);
     const a = new Audio();
     a.preload = "auto";
@@ -65,6 +67,7 @@ export async function loadVoice(url: string, id: string, headers?: Record<string
     if (pendingPlay && ready) { pendingPlay = false; void doPlay(); }
     return true;
   } catch (e) {
+    if (token === loadToken) unloadVoice();
     console.warn("[voice] load failed:", String(e).slice(0, 140));
     return false;
   }
@@ -75,7 +78,7 @@ function doPlay() {
   audio.playbackRate = speed;
   audio.play().then(
     () => console.log("[voice] playing, dur=" + dur.toFixed(1) + "s rate=" + speed),
-    (e) => console.warn("[voice] play rejected:", String(e).slice(0, 160)),
+    (e) => { playing = false; console.warn("[voice] play rejected:", String(e).slice(0, 160)); },
   );
 }
 
@@ -87,12 +90,12 @@ export function toggleVoice(): "play" | "pause" | "restart" | "pending" | "none"
   if (ended) {
     audio.currentTime = 0;
     ended = false;
+    playing = true; // sync: play event fires async, UI reads voicePlaying() now
     void doPlay();
     return "restart";
   }
-  if (audio.paused) void doPlay();
-  else audio.pause();
-  return playing ? "pause" : "play";
+  if (audio.paused) { playing = true; void doPlay(); return "play"; }
+  audio.pause(); playing = false; return "pause";
 }
 
 export function stopVoice() {
@@ -103,6 +106,7 @@ export function stopVoice() {
 }
 
 export function unloadVoice() {
+  loadToken++;
   stopVoice();
   if (audio) { try { audio.removeAttribute("src"); } catch { /* ignore */ } }
   if (objUrl) { URL.revokeObjectURL(objUrl); objUrl = null; }

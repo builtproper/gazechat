@@ -1140,7 +1140,7 @@ function recRefreshInput() {
   }));
 }
 
-// ── reaction picker (long-press, Joel 04.11.) ──
+// ── reaction picker (long-press) ──
 // Yellow-standard emoji WITHOUT skin-tone modifiers. The firmware renders
 // 👍/❤/😀 as glyphs (device-verified); the rest will show as gaps if the
 // font lacks them — drop those from this list once reported.

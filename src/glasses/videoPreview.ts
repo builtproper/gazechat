@@ -23,6 +23,7 @@ let running = false;
 let audioOn = false;
 let inFlight = false;
 let rafId = 0;
+let loopGen = 0; // loop generation: stale pump/tick callbacks must not rearm
 let sendFrame: FrameSender | null = null;
 let reportPos: PositionReporter | null = null;
 
@@ -127,16 +128,20 @@ async function grabFramePng(c: HTMLCanvasElement): Promise<number[] | null> {
   return Array.from(atob(url.split(",")[1] || ""), (ch) => ch.charCodeAt(0));
 }
 
-async function pump() {
-  if (!running || !sendFrame || !canvas) return;
+async function pump(gen: number) {
+  if (!running || gen !== loopGen || !sendFrame || !canvas) return;
   if (inFlight) return; // previous send still running → skip this tick
+  // ended or externally paused: stop pumping frames (a frozen frame would
+  // ride the BLE loop forever — Gemini P3)
+  if (video && (video.ended || video.paused)) { stopLoop(); return; }
   inFlight = true;
+  const sender = sendFrame; // local: a stopLoop() mid-await nulls the global
   try {
     const bytes = await grabFramePng(canvas);
-    if (bytes) await sendFrame(bytes);
+    if (bytes) await sender(bytes);
     // time rides the frame: report position right AFTER the delivery so the
     // transport line always shows the timestamp of what just landed (1 Hz)
-    if (running && reportPos) reportPos();
+    if (running && gen === loopGen && reportPos) reportPos();
   } catch { /* superseded or hiccup: stopLoop ends the loop via running */ }
   inFlight = false;
 }
@@ -167,9 +172,20 @@ export async function posterFrame(): Promise<number[] | null> {
   const els = ensureEls();
   if (!els || !video) return null;
   const v = video;
-  if (v.readyState < 2) await new Promise((r) => { v.addEventListener("loadeddata", r, { once: true }); });
+  if (v.readyState < 2) {
+    await new Promise<void>((r) => {
+      const done = () => { v.removeEventListener("loadeddata", done); v.removeEventListener("error", done); r(); };
+      v.addEventListener("loadeddata", done, { once: true });
+      v.addEventListener("error", done, { once: true });
+      setTimeout(done, 3000); // broken source: never hang the poster (Gemini P11)
+    });
+  }
   try { v.currentTime = Math.min(0.5, (v.duration || 1) / 3); } catch { /* some sources refuse */ }
-  await new Promise((r) => { v.addEventListener("seeked", r, { once: true }); setTimeout(r, 600); });
+  await new Promise<void>((r) => {
+    const done = () => { v.removeEventListener("seeked", done); r(); };
+    v.addEventListener("seeked", done, { once: true });
+    setTimeout(done, 600);
+  });
   return await grabFramePng(els.c);
 }
 
@@ -188,15 +204,18 @@ export function startLoop(sender: FrameSender, onDelivered?: PositionReporter) {
   // so the loop self-paces to the fastest rate the transport allows. A 150ms
   // gap after each frame lets the transport-line text upgrade land before the
   // next image send (overlapping bridge writes race — matic-even H5).
+  const gen = ++loopGen;
   const tick = () => {
-    if (!running) return;
-    void pump().finally(() => { if (running) rafId = window.setTimeout(tick, 150); });
+    if (!running || gen !== loopGen) return;
+    void pump(gen).finally(() => { if (running && gen === loopGen) rafId = window.setTimeout(tick, 150); });
   };
+  if (rafId) clearTimeout(rafId);
   rafId = window.setTimeout(tick, 150);
 }
 
 export function stopLoop() {
   running = false;
+  loopGen++;
   sendFrame = null;
   reportPos = null;
   if (rafId) { clearTimeout(rafId); rafId = 0; }

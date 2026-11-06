@@ -596,7 +596,7 @@ export class BeeperClient {
     }
     
     const data = await response.json()
-    return data.chats || []
+    return data.items || data.chats || []
   }
 
   /**
@@ -638,7 +638,7 @@ export class BeeperClient {
    * Create WebSocket connection for real-time updates
    */
   createWebSocket(onMessage: (event: BeeperWebSocketEvent) => void): WebSocket {
-    const wsUrl = this.baseUrl.replace('http', 'ws') + '/v1/ws'
+    const wsUrl = this.baseUrl.replace(/^http/i, 'ws') + '/v1/ws'
     const ws = new WebSocket(`${wsUrl}?access_token=${this.token}`)
     
     ws.onopen = () => {
