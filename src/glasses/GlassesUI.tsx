@@ -12,7 +12,7 @@ import {
   BeeperMessage,
   formatMessageText,
 } from "../services/beeperClient";
-import { DisplayLine, GlassAction, GlassNavState } from "even-toolkit/types";
+import { GlassAction, GlassNavState } from "even-toolkit/types";
 import {
   activateKeepAlive,
   deactivateKeepAlive,
@@ -21,8 +21,6 @@ import { mapGlassEvent } from "even-toolkit/action-map";
 import { bindKeyboard } from "even-toolkit/keyboard";
 import { useCallback, useEffect, useState, useRef } from "react";
 
-import { buildHeaderLine } from "even-toolkit/text-utils";
-import { line } from "even-toolkit/types";
 import {
   CreateStartUpPageContainer,
   waitForEvenAppBridge,
@@ -65,9 +63,9 @@ import { imgLayout as imgLayoutFor, renderImageSlices } from "./imagePreview";
 // Even G2: 576px wide, ~288px tall
 // Font: 22px Courier New monospace (~12px per char)
 // Visible width: ~48 chars, but leaving padding, use 40 chars
-const DISPLAY_WIDTH = 60; // Max characters per line
+ // Max characters per line
  // Max lines on Even G2 display (288px / ~40px per line)
-const SEPARATOR_LINE = "----------------------------------------"; // 40 dashes
+ // 40 dashes
 const GLASSES_DISPLAY_WIDTH = 576;
 const GLASSES_DISPLAY_HEIGHT = 288;
 
@@ -81,6 +79,10 @@ const BASE_PAGE_CONTAINER = {
   TEXT_NAME: "main-text",
   CHAT_IMAGE_ID: 3,
   CHAT_IMAGE_NAME: "chat-icons",
+  HEADER_ID: 4,
+  HEADER_NAME: "startup-hdr",
+  BOX_ID: 5,
+  BOX_NAME: "startup-box",
 } as const;
 
 // Storage key for persisting state (using Even SDK storage)
@@ -262,9 +264,6 @@ function sanitizeHtmlAndEntities(text: string): string {
 }
 
 // Helper: create a separator line (using meta style so text renders)
-function sep(): DisplayLine {
-  return line(SEPARATOR_LINE, "meta");
-}
 
 // Own messages often arrive with a raw bridge address like "@user:beeper.com"
 // as senderName — show a friendly "Me" instead.
@@ -306,10 +305,6 @@ interface TranscriptionResponse {
 
 // Glasses display is ~40 chars wide at default font
 
-function padRight(text: string, len: number): string {
-  while (text.length < len) text += " ";
-  return text.slice(0, len);
-}
 
 // Truncate name: show first word + first letter of second word (if any)
 // ── Pixel-accurate text metrics (G2 font is proportional) ──────────────────
@@ -350,11 +345,6 @@ function truncatePx(text: string, maxPx: number): string {
 
 // Pad with spaces so the string occupies at least targetPx (proportional-safe).
 // See: https://github.com/nickustinov/even-g2-notes/blob/main/docs/display.md
-function toFullwidth(str: string): string {
-  return str.replace(/[\x20-\x7E]/g, (ch) =>
-    ch === " " ? "\u3000" : String.fromCharCode(ch.charCodeAt(0) + 0xfee0),
-  );
-}
 
 // Calculate the scroll position to show maximum messages while keeping the bottom visible
 // today → none; ≤7 days → Mon/Tue/…; ≤1 year → TT.MM.; older → TT.MM.JJ
@@ -424,22 +414,6 @@ function buildBeeperAssetUrl(baseUrl: string, assetUrl: string): string {
 
 
 
-function buildGlassesText(lines: DisplayLine[], fullwidth = true): string {
-  const text = lines
-    .map((entry) => {
-      if (entry.style === "separator") {
-        return "-".repeat(44); // ASCII: U+2500 missing in the firmware font
-      }
-      if (entry.style === "inverted" || entry.inverted) {
-        return `▶ ${entry.text}`;
-      }
-      return `  ${entry.text}`;
-    })
-    .join("\n");
-  // Fullwidth conversion keeps manually-padded columns aligned on the
-  // proportional G2 font; the chat list skips it (pixel metrics instead).
-  return fullwidth ? toFullwidth(text) : text;
-}
 
 // ── spine image: "GazeChat" wordmark (user-provided art, pre-rotated to
 // 33×144 grayscale PNG, imported as data URL and shipped as raw bytes) ──────
@@ -1427,29 +1401,6 @@ async function transcribePcmAudio(
 // ═══════════════════════════════════════════════════════════════
 // DISPLAY BUILDERS
 // ═══════════════════════════════════════════════════════════════
-function buildStartupDisplay(tick: number): DisplayLine[] {
-  const lines: DisplayLine[] = [];
-  const time = new Date().toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-  lines.push(line(buildHeaderLine("GazeChat", time), "inverted"));
-  lines.push(sep());
-
-  // Centered framed loading box with animated dots (fixed width, no jitter)
-  const dots = ".".repeat(tick % 4);
-  const text = "Loading messages";
-  const inner = text.length + 6; // room for "  " + up to 3 dots
-  const left = Math.max(0, Math.floor((DISPLAY_WIDTH - (inner + 2)) / 2));
-  const pad = " ".repeat(left);
-  lines.push(line("", "normal"));
-  lines.push(line(`${pad}+${"-".repeat(inner)}+`, "normal"));
-  lines.push(line(`${pad}|  ${padRight(text + dots, inner - 2)}|`, "normal"));
-  lines.push(line(`${pad}+${"-".repeat(inner)}+`, "normal"));
-  lines.push(sep());
-  lines.push(line("", "meta"));
-  return lines;
-}
 
 
 
@@ -1552,8 +1503,10 @@ export function GlassesUI({
   const chatListAnchorIdRef = useRef<string | null>(null);
   const glassesBridgeRef = useRef<EvenAppBridge | null>(null);
   const glassesInitializedRef = useRef<boolean>(false);
-  const glassesLayoutRef = useRef<"text" | "chats" | "messages" | null>(null);
+  const glassesLayoutRef = useRef<"text" | "startup" | "chats" | "messages" | null>(null);
   const glassesTextRef = useRef<string>("");
+  const glassesStartupBodyRef = useRef<string>("");
+  const glassesStartupHdrRef = useRef<string>("");
   const glassesChatIconSignatureRef = useRef<string>("");
   const glassesChatIconsEnabledRef = useRef<boolean>(false);
   const beeperBaseRef = useRef<string | undefined>(beeperConfig?.baseUrl);
@@ -2400,17 +2353,6 @@ export function GlassesUI({
     }
   }
 
-  const getDisplayLines = useCallback(
-    (snapshot: AppState, _nav: GlassNavState): DisplayLine[] => {
-      // only "startup" still uses the toolkit text renderer; chats/messages
-      // render through the custom glasses path (renderChatsPage/renderMessagesPage)
-      if (snapshot.currentScreen === "startup") {
-        return buildStartupDisplay(snapshot.startupTick);
-      }
-      return [line("GazeChat", "inverted")];
-    },
-    [],
-  );
 
   // Handle glass actions
   // Note: We use a ref to access latest handlers to avoid stale closure issues
@@ -2723,72 +2665,87 @@ export function GlassesUI({
 
     await bridge.createStartUpPageContainer(startupContainer);
     glassesInitializedRef.current = true;
-    glassesLayoutRef.current = "text";
+    glassesLayoutRef.current = "startup";
   }, []);
 
-  const renderTextPage = useCallback(
-    async (bridge: EvenAppBridge, text: string) => {
-      if (glassesLayoutRef.current !== "text") {
+  // Startup screen: a real bordered container (firmware draws the frame),
+  // centred and sized to the text — NOT a box drawn from glyphs, because the
+  // proportional font makes any character box misalign on device.
+  const renderStartupPage = useCallback(
+    async (bridge: EvenAppBridge, tick: number) => {
+      const dots = ".".repeat(tick % 4);
+      const body = "Loading messages" + dots;
+      const hdr = `▶ GazeChat  ${clockText()}`;
+      const pad = 8;
+      // fixed width from the widest state so the dots don't make the box breathe
+      const boxW = Math.min(GLASSES_DISPLAY_WIDTH, Math.ceil(textPx("Loading messages...") + pad * 2));
+      const boxH = 30 + pad;
+      const boxX = Math.floor((GLASSES_DISPLAY_WIDTH - boxW) / 2);
+      const boxY = Math.floor((GLASSES_DISPLAY_HEIGHT - boxH) / 2);
+
+      if (glassesLayoutRef.current !== "startup") {
         await bridge.rebuildPageContainer(
           new RebuildPageContainer({
-            containerTotalNum: 2,
+            containerTotalNum: 3,
             textObject: [
               new TextContainerProperty({
                 containerID: BASE_PAGE_CONTAINER.OVERLAY_ID,
                 containerName: BASE_PAGE_CONTAINER.OVERLAY_NAME,
-                xPosition: 0,
-                yPosition: 0,
-                width: GLASSES_DISPLAY_WIDTH,
-                height: GLASSES_DISPLAY_HEIGHT,
-                borderWidth: 0,
-                borderColor: 0,
-                borderRadius: 0,
-                paddingLength: 0,
-                content: "",
-                isEventCapture: 1,
+                xPosition: 0, yPosition: 0,
+                width: GLASSES_DISPLAY_WIDTH, height: GLASSES_DISPLAY_HEIGHT,
+                borderWidth: 0, borderColor: 0, borderRadius: 0, paddingLength: 0,
+                content: " ", isEventCapture: 1, zOrderIndex: 1,
               }),
               new TextContainerProperty({
-                containerID: BASE_PAGE_CONTAINER.TEXT_ID,
-                containerName: BASE_PAGE_CONTAINER.TEXT_NAME,
-                xPosition: 0,
-                yPosition: 0,
-                width: GLASSES_DISPLAY_WIDTH,
-                height: GLASSES_DISPLAY_HEIGHT,
-                borderWidth: 0,
-                borderColor: 0,
-                borderRadius: 0,
-                paddingLength: 6,
-                content: text,
-                isEventCapture: 0,
+                containerID: BASE_PAGE_CONTAINER.HEADER_ID,
+                containerName: BASE_PAGE_CONTAINER.HEADER_NAME,
+                xPosition: 2, yPosition: 2,
+                width: GLASSES_DISPLAY_WIDTH - 4, height: 34,
+                borderWidth: 0, borderColor: 0, borderRadius: 0, paddingLength: 0,
+                content: hdr, textColor: 4, isEventCapture: 0, zOrderIndex: 2,
+              }),
+              new TextContainerProperty({
+                containerID: BASE_PAGE_CONTAINER.BOX_ID,
+                containerName: BASE_PAGE_CONTAINER.BOX_NAME,
+                xPosition: boxX, yPosition: boxY,
+                width: boxW, height: boxH,
+                borderWidth: 1, borderColor: 13, borderRadius: 6, paddingLength: pad,
+                content: body, textColor: 4, isEventCapture: 0, zOrderIndex: 3,
               }),
             ],
             imageObject: [],
             listObject: [],
           }),
         );
-        glassesLayoutRef.current = "text";
-        glassesTextRef.current = text;
-        glassesChatIconSignatureRef.current = "";
+        glassesLayoutRef.current = "startup";
+        glassesStartupBodyRef.current = body;
+        glassesStartupHdrRef.current = hdr;
         return;
       }
-
-      if (glassesTextRef.current === text) {
-        return;
+      if (glassesStartupBodyRef.current !== body) {
+        await bridge.textContainerUpgrade(
+          new TextContainerUpgrade({
+            containerID: BASE_PAGE_CONTAINER.BOX_ID,
+            containerName: BASE_PAGE_CONTAINER.BOX_NAME,
+            content: body,
+          }),
+        );
+        glassesStartupBodyRef.current = body;
       }
-
-      await bridge.textContainerUpgrade(
-        new TextContainerUpgrade({
-          containerID: BASE_PAGE_CONTAINER.TEXT_ID,
-          containerName: BASE_PAGE_CONTAINER.TEXT_NAME,
-          contentOffset: 0,
-          contentLength: text.length,
-          content: text,
-        }),
-      );
-      glassesTextRef.current = text;
+      if (glassesStartupHdrRef.current !== hdr) {
+        await bridge.textContainerUpgrade(
+          new TextContainerUpgrade({
+            containerID: BASE_PAGE_CONTAINER.HEADER_ID,
+            containerName: BASE_PAGE_CONTAINER.HEADER_NAME,
+            content: hdr,
+          }),
+        );
+        glassesStartupHdrRef.current = hdr;
+      }
     },
     [],
   );
+
 
   // voice bar ticker: 2 fps while a note plays (enough for 2.0x speed),
   // idle otherwise — the transport line rides the normal upgrade path
@@ -3326,7 +3283,9 @@ export function GlassesUI({
       const nav = navRef.current;
 
       console.log("[flush]", snapshot.currentScreen, "loading", snapshot.isLoading, "msgs", snapshot.messages.length);
-      if (snapshot.currentScreen === "chats") {
+      if (snapshot.currentScreen === "startup") {
+        await renderStartupPage(bridge, snapshot.startupTick);
+      } else if (snapshot.currentScreen === "chats") {
         await renderChatsPage(bridge, snapshot, nav);
       } else if (snapshot.currentScreen === "messages") {
         // keep the chat list until the first messages arrive (single switch,
@@ -3334,10 +3293,6 @@ export function GlassesUI({
         // screen so the list can't rebuild underneath (that was the flash)
         if (snapshot.isLoading && snapshot.messages.length === 0) return;
         await renderMessagesPage(bridge, snapshot, nav);
-      } else {
-        const lines = getDisplayLines(snapshot, nav);
-        const text = buildGlassesText(lines, false);
-        await renderTextPage(bridge, text);
       }
     } catch (e) {
       console.warn("[GlassesUI] Failed to render glasses display:", e);
@@ -3348,7 +3303,7 @@ export function GlassesUI({
         void flushGlassesDisplay();
       }
     }
-  }, [ensureGlassesStartup, getDisplayLines, renderChatsPage, renderTextPage]);
+  }, [ensureGlassesStartup, renderChatsPage, renderStartupPage]);
 
   useEffect(() => {
     _beeperForDraft = beeper as unknown as typeof _beeperForDraft;
