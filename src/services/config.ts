@@ -21,7 +21,7 @@ export interface AppConfig {
   disclaimerAcknowledged?: number
 }
 
-const CONFIG_KEY = 'even-messages-config'
+const CONFIG_KEY = 'gazechat-config'
 
 // Bridge instance for storage
 let bridgeInstance: EvenAppBridge | null = null

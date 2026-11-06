@@ -84,7 +84,7 @@ const BASE_PAGE_CONTAINER = {
 } as const;
 
 // Storage key for persisting state (using Even SDK storage)
-const STORAGE_KEY = "even-messages-state";
+const STORAGE_KEY = "gazechat-state";
 
 // Saved state interface
 interface SavedState {
@@ -428,7 +428,7 @@ function buildGlassesText(lines: DisplayLine[], fullwidth = true): string {
   const text = lines
     .map((entry) => {
       if (entry.style === "separator") {
-        return "─".repeat(44);
+        return "-".repeat(44); // ASCII: U+2500 missing in the firmware font
       }
       if (entry.style === "inverted" || entry.inverted) {
         return `▶ ${entry.text}`;
@@ -1443,9 +1443,9 @@ function buildStartupDisplay(tick: number): DisplayLine[] {
   const left = Math.max(0, Math.floor((DISPLAY_WIDTH - (inner + 2)) / 2));
   const pad = " ".repeat(left);
   lines.push(line("", "normal"));
-  lines.push(line(`${pad}┌${"─".repeat(inner)}┐`, "normal"));
-  lines.push(line(`${pad}│  ${padRight(text + dots, inner - 2)}│`, "normal"));
-  lines.push(line(`${pad}└${"─".repeat(inner)}┘`, "normal"));
+  lines.push(line(`${pad}+${"-".repeat(inner)}+`, "normal"));
+  lines.push(line(`${pad}|  ${padRight(text + dots, inner - 2)}|`, "normal"));
+  lines.push(line(`${pad}+${"-".repeat(inner)}+`, "normal"));
   lines.push(sep());
   lines.push(line("", "meta"));
   return lines;
