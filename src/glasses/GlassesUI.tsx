@@ -1144,10 +1144,12 @@ function recRefreshInput() {
 // Yellow-standard emoji WITHOUT skin-tone modifiers. The firmware renders
 // 👍/❤/😀 as glyphs (device-verified); the rest will show as gaps if the
 // font lacks them — drop those from this list once reported.
-const REACT_EMOJIS = ["\u{1F44D}", "\u{1F44E}", "\u{1F642}", "\u{1F604}", "\u{1F605}", "\u2764", "\u{1F44B}"];
-let reactPick: { msgId: string; option: number } | null = null;
+// 👎 and 👋 dropped: they render as gaps on the device (04.11. test)
+const REACT_EMOJIS = ["\u{1F44D}", "\u{1F642}", "\u{1F604}", "\u{1F605}", "\u2764"];
+let reactPick: { msgId: string; option: number; removeKey?: string } | null = null;
 function reactLine(): string | null {
   if (!reactPick) return null;
+  if (reactPick.removeKey) return "\u25B6 Tap to remove reaction";
   return REACT_EMOJIS
     .map((e, i) => (i === reactPick!.option ? "\u25B6" + e : " " + e))
     .join(" ");
@@ -1731,6 +1733,24 @@ export function GlassesUI({
       void flushGlassesDisplay();
     } catch (e) {
       console.warn("[react] add failed:", String(e).slice(0, 140));
+    }
+  }, [beeper]);
+
+  const removeMyReaction = useCallback(async (msgId: string, key: string) => {
+    const chat = stateRef.current.selectedChat;
+    if (!beeper || !chat) return;
+    try {
+      await beeper.removeReaction(chat, msgId, key);
+      setState((st) => ({
+        ...st,
+        messages: st.messages.map((m) => m.id === msgId
+          ? { ...m, reactions: ((m as any).reactions || []).filter((r: any) => r.reactionKey !== key) }
+          : m),
+      }));
+      msgSigRef.current = "";
+      void flushGlassesDisplay();
+    } catch (e) {
+      console.warn("[react] remove failed:", String(e).slice(0, 140));
     }
   }, [beeper]);
 
@@ -2411,6 +2431,19 @@ export function GlassesUI({
       // reaction picker open: scroll walks the emoji, tap sends, double-tap
       // closes — everything else is swallowed so the chat flow is untouched
       if (reactPick) {
+        if (reactPick.removeKey) {
+          // single option: tap removes my reaction, scroll is inert
+          if (action.type === "SELECT_HIGHLIGHTED") {
+            const { msgId, removeKey } = reactPick;
+            reactPick = null;
+            recRefreshInput();
+            void removeMyReaction(msgId, removeKey);
+          } else if (action.type === "GO_BACK") {
+            reactPick = null;
+            recRefreshInput();
+          }
+          return nav;
+        }
         if (action.type === "HIGHLIGHT_MOVE") {
           const n = REACT_EMOJIS.length;
           reactPick.option = (reactPick.option + (action.direction === "down" ? 1 : n - 1)) % n;
@@ -3390,6 +3423,7 @@ export function GlassesUI({
       // and landing there is the intuitive spot; reading-only keeps the exact
       // row even if new chats pushed it down. Index is the fallback.
       if (previousScreenRef.current === "chats" && state.currentScreen === "messages") {
+        reactPick = null; // a fresh chat never inherits an open picker
         chatListIndexRef.current = navRef.current.highlightedIndex;
         chatListAnchorIdRef.current = state.selectedChat;
       }
@@ -3492,7 +3526,14 @@ export function GlassesUI({
             if (snap.currentScreen === "messages" && !recActive() && msgFocusRef.current >= 0) {
               const m = snap.messages[Math.min(msgFocusRef.current, snap.messages.length - 1)];
               if (m && m.id) {
-                reactPick = { msgId: m.id, option: 0 };
+                // already reacted myself? → offer removal instead of the list
+                const chat = snap.chats.find((c: any) => c.id === snap.selectedChat);
+                const me = (chat?.participants?.items || []).find((x: any) => x.isSelf)?.id as string | undefined;
+                const mine = ((m as any).reactions || []).find(
+                  (r: any) => me && (r.participantID === me || r.id === me));
+                reactPick = mine
+                  ? { msgId: m.id, option: 0, removeKey: mine.reactionKey }
+                  : { msgId: m.id, option: 0 };
                 recRefreshInput();
               }
             }
