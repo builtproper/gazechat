@@ -2277,7 +2277,9 @@ export function GlassesUI({
         throw new Error("Beeper is not configured");
       }
 
+      const t0 = Date.now();
       const result = await beeper.listMessages(chatId);
+      console.log("[msg] listMessages ok in", Date.now() - t0, "ms, raw:", result.messages.length);
       // REACTION messages are not bubbles: Beeper marks them isHidden and
       // attaches the reaction to the ORIGINAL message (reactions[]). Show
       // them as a marker after the time instead of a "[media]" bubble.
@@ -2325,7 +2327,8 @@ export function GlassesUI({
           highlightedIndex: options?.silent ? s.highlightedIndex : 0,
         };
       });
-    } catch {
+    } catch (e) {
+      console.warn("[msg] listMessages FAILED:", String(e).slice(0, 200));
       setState((s) => {
         const sameMessages = s.messages.length === 0;
         const sameLoading = options?.silent ? true : s.isLoading === false;

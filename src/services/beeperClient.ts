@@ -466,7 +466,8 @@ export class BeeperClient {
     })
     
     if (!response.ok) {
-      throw new Error(`Failed to list messages: ${response.statusText}`)
+      const detail = (await response.text().catch(() => '')).slice(0, 160)
+      throw new Error(`Failed to list messages: HTTP ${response.status} ${response.statusText} ${detail}`)
     }
     
     const data = await response.json()
