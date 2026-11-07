@@ -27,9 +27,9 @@
 - Reaction markers, date tags (Mon / 22.10. / 22.10.25), unread badges, low-priority and archived filters, lazy paging for large chat lists
 
 **Media on the glasses**
-- Photo previews filling the message area (portrait photos use the full height, split across two containers)
-- Video preview: tap a focused video to play a grayscale preview loop with a transport bar (play/pause/restart)
-- Voice-note playback: tap a focused voice message to play/pause/replay, transport bar with position
+- Photo previews filling the message area (landscape photos use the full height, split across two containers)
+- Video preview: tap a focused video to play a grayscale preview loop with a playback bar (play/pause/restart)
+- Voice-note playback: tap a focused voice message to play/pause/replay, playback bar with position
 - Playback speed 0.5×–2.0× via the glasses menu (applies live, survives restarts)
 - Optional preview audio for media playback on your phone (menu toggle)
 
@@ -96,7 +96,7 @@ GazeChat talks only to your own Beeper Desktop (directly or through your own gat
 
 ## Credits
 
-Fork of [even-messages](https://github.com/thibautrey/even-messages) by Thibaut Rey, heavily reworked (unified inbox, focus system, media previews, voice notes, reactions, drafts, paging). Thanks to Even Realities for the G2 platform and to Beeper for the Desktop API.
+Fork of [even-messages](https://github.com/thibautrey/even-messages) by Thibaut Rey, heavily reworked (focus system, media previews, voice notes, reactions, drafts, paging). Thanks to Even Realities for the G2 platform and to Beeper for the Desktop API.
 
 ## License
 
