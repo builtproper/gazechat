@@ -1,14 +1,12 @@
-# Message Lens
+# GazeChat
 
 <p align="center">
   <img src="https://img.shields.io/badge/Platform-Even%20G2%20Glasses-6366f1?style=for-the-badge" alt="Platform">
-  <img src="https://img.shields.io/badge/Framework-React-61dafb?style=for-the-badge" alt="Framework">
-  <img src="https://img.shields.io/badge/Backend-Beeper%20API-e1306c?style=for-the-badge" alt="Backend">
-  <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License">
+  <img src="https://img.shields.io/badge/Backend-Beeper%20Desktop%20API-e1306c?style=for-the-badge" alt="Backend">
 </p>
 
 <p align="center">
-  Read and reply to messages from WhatsApp, Signal, Telegram, and more — directly from your Even G2 smart glasses.
+  The most feature-complete messenger on Even G2 — WhatsApp, Telegram, Signal, iMessage, Messenger, Instagram, Discord, Slack and every other Beeper network, through a Beeper gateway you set up yourself.
 </p>
 
 <p align="center">
@@ -17,226 +15,89 @@
 
 ---
 
-## ✨ Features
+## Features
 
-- **📱 Multi-Platform Support** — Connect WhatsApp, Signal, Telegram, and any Beeper-supported messaging service
-- **👓 Glasses-First UX** — Optimized text-only interface for Even G2's 576×288 display
-- **⚡ Quick Replies** — Send preset responses with a single tap
-- **🔔 Unread Badges** — See at a glance which conversations have new messages
-- **🔄 Real-time Sync** — Messages update automatically via Beeper Desktop API
-- **💻 Dev Mode** — Full web interface for development and testing
+**Messaging**
+- Unified inbox across all Beeper networks (no per-messenger sub-views)
+- Read chats on the glasses; reply by typing on your phone (the compose box mirrors to the glasses live) or by voice
+- Draft sync: unfinished text carries over between phone and glasses
+- Send real WhatsApp-style voice notes (recorded on the glasses mic, encoded OGG/Opus on the phone)
+- Reactions via long-press (add and remove your own)
+- Group chats show the sender ("Name wrote:")
+- Reaction markers, date tags (Mon / 22.10. / 22.10.25), unread badges, low-priority and archived filters, lazy paging for large chat lists
 
----
+**Media on the glasses**
+- Photo previews filling the message area (portrait photos use the full height, split across two containers)
+- Video preview: tap a focused video to play a grayscale preview loop with a transport bar (play/pause/restart)
+- Voice-note playback: tap a focused voice message to play/pause/replay, transport bar with position
+- Playback speed 0.5×–2.0× via the glasses menu (applies live, survives restarts)
+- Optional preview audio for media playback on your phone (menu toggle)
 
-## 🚀 Quick Start
+**Speech-to-text (optional)**
+- Dictate a reply, transcribe it on a local or self-hosted OpenAI-compatible endpoint (`POST /v1/audio/transcriptions`), review the text, then send as text or as the original voice note
 
-### Prerequisites
+**Interaction model**
+- Scroll moves a brightness focus across messages and the mic icon; long messages page block by block (X/Y indicator)
+- Tap selects; double-tap goes back (and cancels recording/transcription one step at a time)
+- Long-press opens the reaction picker in the input bar
 
-- Node.js 18+
-- [Beeper Desktop](https://www.beeper.com/) running locally
-- Even G2 smart glasses (optional, works in browser for dev)
+## Requirements
 
-### Installation
+- [Beeper Desktop](https://www.beeper.com/) running on your computer
+- Even G2 glasses with the Even Realities app (works in the [Even Hub simulator](https://hub.evenrealities.com) too)
+- Node.js 18+ (to build)
+- Optional: an OpenAI-compatible speech-to-text endpoint for transcription
+
+## Setup
+
+### 1. Beeper Desktop API
+
+1. Beeper Desktop → **Settings → Integrations**
+2. Under **Beeper Desktop API**, enable **Allow connections**
+3. **Approved connections → +** to create a token. Enable **Allow sensitive actions** only if you want GazeChat to send messages (replies, reactions, voice notes)
+4. Copy the token
+
+### 2. Connect GazeChat to Beeper
+
+- **Same machine / LAN:** Base URL `http://<computer>:23373`
+- **Remote (phone away from home):** expose Beeper Desktop through a reverse proxy or VPN you control — see [docs/TAILSCALE_SETUP.md](docs/TAILSCALE_SETUP.md) for one proven approach. Whatever you expose, make sure it requires the Bearer token (HTTPS recommended).
+
+### 3. First run
+
+Open GazeChat on the glasses (or the phone view), go to **Settings**, enter the Base URL and token, then **Test & Save**. Speech-to-text is configured the same way (URL, token, model) and can be left empty — voice notes then send without transcription.
+
+## Controls
+
+| Gesture | Chat list | In a chat |
+|---------|-----------|-----------|
+| Scroll | Move cursor / change page | Move focus across messages, page long messages |
+| Tap | Open chat | Play/pause focused video or voice note; confirm recorder choice |
+| Tap the mic | — | Start voice recording (tap again to stop, then choose send-as-voice or transcribe) |
+| Long-press | — | Reaction picker (or "remove my reaction") |
+| Double-tap | Exit app (root) | Back one level / cancel recording |
+| Glasses menu | Filters (low-priority, archived) | Playback speed, preview audio, filters |
+
+Typing: focus the input field and type on your phone — text mirrors to the glasses live.
+
+## Development
 
 ```bash
-# Clone the repository
-git clone git@github.com:thibautrey/even-messages.git
-cd even-messages
-
-# Install dependencies
 npm install
-
-# Run the app locally
-npm run dev
+npm run dev        # dev server (http://localhost:5173) — point the simulator or glasses QR at it
+npm run build      # production build into dist/
+npm run pack       # build + pack messages.ehpk via evenhub CLI
 ```
 
-### Configuration
+Architecture: React app with a headless glasses controller (`src/glasses/GlassesUI.tsx`) that renders the 576×288 display through the Even Hub SDK container model; media engines for photo/video/voice live in `src/glasses/*.ts`; the Beeper client is `src/services/beeperClient.ts`.
 
-#### Set up Beeper Desktop
+## Privacy
 
-1. In Beeper Desktop, open **Settings → Integrations**.
-2. Under **Beeper Desktop API**, turn on **Allow connections**.
-3. Under **Approved connections**, select the plus button to **Create a new token for Beeper Desktop API**.
-4. **Allow sensitive actions** lets the token send messages and modify your account. Enable it only if you want Message Lens to send replies, then create and copy the token.
+GazeChat talks only to your own Beeper Desktop (directly or through your own gateway) and, if configured, your own speech-to-text endpoint. No data passes through any third-party server.
 
-<p align="center">
-  <img src="./public/beeper-desktop-setup/01-integrations.png" alt="Beeper Desktop Integrations settings with Allow connections enabled" width="700">
-</p>
+## Credits
 
-<p align="center">
-  <img src="./public/beeper-desktop-setup/02-approved-connections.png" alt="Beeper Desktop Approved connections with the add button" width="700">
-</p>
+Fork of [even-messages](https://github.com/thibautrey/even-messages) by Thibaut Rey, heavily reworked (unified inbox, focus system, media previews, voice notes, reactions, drafts, paging). Thanks to Even Realities for the G2 platform and to Beeper for the Desktop API.
 
-<p align="center">
-  <img src="./public/beeper-desktop-setup/03-create-access-token.png" alt="Beeper Desktop dialog with a callout that Allow sensitive actions can send messages and modify your account; enable it only for replies" width="700">
-</p>
+## License
 
-> **Support note:** Please do not ask the Beeper Developer Community for help using Message Lens. It is for people building integrations, not end-user support.
-
-#### Connect Message Lens
-
-1. Open the app at `http://localhost:5173`.
-2. Click **Settings** in the top-right corner.
-3. Enter your Beeper Desktop API credentials:
-   - **Base URL**: `http://localhost:23373`
-   - **Token**: The access token you created above
-
----
-
-## 📖 Usage
-
-### Glasses Controls
-
-| Gesture | Action |
-|---------|--------|
-| Scroll Up/Down | Navigate list |
-| Tap | Select / Confirm |
-| Double-tap | Go back |
-
-### Screen Flow
-
-```
-┌─────────────┐
-│  ACCOUNTS   │  Select messaging platform
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│    CHATS    │  Browse conversations
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│  MESSAGES   │  Read thread
-└──────┬──────┘
-       │
-       ▼
-┌─────────────┐
-│ QUICK REPLY │  Send preset response
-└─────────────┘
-```
-
-### Display Conventions
-
-```
-Even Msg        14:30    ← Header with time
-────────────────────────
-> [D] John Doe       [!2]   ← Selected item
-  [G] Family Group   [!5]   ← Group chat with unread
-  [D] Alice Smith           
-────────────────────────
-* Reply                  ← Action available
-```
-
-**Indicators:**
-- `>` — Currently selected item
-- `[D]` — Direct message
-- `[G]` — Group chat
-- `[!n]` — n unread messages
-- `*` — Action available
-
----
-
-## 🏗️ Architecture
-
-```
-even-messages/
-├── src/
-│   ├── glasses/
-│   │   └── GlassesUI.tsx    # Even G2 display logic
-│   ├── components/
-│   │   └── DevModeUI.tsx    # Web interface for dev
-│   └── services/
-│       └── beeperClient.ts   # Beeper API integration
-├── dist/                     # Production build
-└── package.json
-```
-
-### Key Technologies
-
-| Technology | Purpose |
-|------------|---------|
-| [even-toolkit](https://www.npmjs.com/package/even-toolkit) | Even G2 SDK for React |
-| [Vite](https://vitejs.dev/) | Build tooling |
-| [TypeScript](https://www.typescriptlang.org/) | Type safety |
-| [TailwindCSS](https://tailwindcss.com/) | Styling |
-
----
-
-## 🔧 Development
-
-### Available Scripts
-
-```bash
-npm run dev      # Start dev server with hot reload
-npm run build    # Production build
-npm run preview  # Preview production build
-```
-
-### Testing on Glasses
-
-1. Build the project: `npm run build`
-2. Serve the `dist/` folder (or deploy to Even App)
-3. Connect your Even G2 glasses
-4. Navigate using tap and scroll gestures
-
-### Browser Simulation
-
-When running in a browser (outside Even App), keyboard controls simulate glasses:
-
-| Key | Action |
-|-----|--------|
-| ↑ / ↓ | Navigate |
-| Enter | Select |
-| Escape | Back |
-
----
-
-## 📡 API Reference
-
-### Beeper Desktop API
-
-The app connects to Beeper Desktop's local API:
-
-```
-Base URL: http://localhost:23373
-Headers:  Authorization: Bearer <token>
-```
-
-**Endpoints Used:**
-- `GET /v1/accounts` — List connected accounts
-- `GET /v1/chats` — List conversations
-- `GET /v1/messages/:chatId` — Fetch messages
-- `POST /v1/messages/:chatId` — Send message
-
----
-
-## 🤝 Contributing
-
-Contributions are welcome! Please feel free to submit a Pull Request.
-
-1. Fork the repository
-2. Create your feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
-
----
-
-## 📄 License
-
-This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
-
----
-
-## 🙏 Acknowledgments
-
-- [Even Realities](https://evenrealities.com/) for the G2 smart glasses platform
-- [Beeper](https://www.beeper.com/) for unified messaging API
-- [even-toolkit](https://www.npmjs.com/package/even-toolkit) contributors
-
----
-
-<p align="center">
-  Made with ❤️ for Even G2 glasses
-</p>
+Upstream even-messages is MIT-licensed; this fork is published under the same terms. See [LICENSE](LICENSE).
