@@ -13,6 +13,27 @@
   <img src="https://raw.githubusercontent.com/evenrealities/.github/main/even-g2.png" alt="Even G2 Glasses" width="400">
 </p>
 
+## Screenshots
+
+<table>
+  <tr>
+    <td><img src="docs/screenshots/chat-list.png" alt="Chat list" width="288"></td>
+    <td><img src="docs/screenshots/reactions.png" alt="Reaction picker" width="288"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/voice-recording.png" alt="Voice recording with live level meter" width="288"></td>
+    <td><img src="docs/screenshots/voice-playback.png" alt="Voice message playback" width="288"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/video-preview.png" alt="Video preview with transport bar" width="288"></td>
+    <td><img src="docs/screenshots/transcription.png" alt="Voice transcription review" width="288"></td>
+  </tr>
+  <tr>
+    <td><img src="docs/screenshots/menu.png" alt="Glasses menu" width="288"></td>
+    <td></td>
+  </tr>
+</table>
+
 ---
 
 ## Features
