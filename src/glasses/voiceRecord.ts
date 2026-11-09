@@ -131,75 +131,43 @@ export function recMergePcm(): Uint8Array {
 }
 
 // ── OGG/Opus encoding (WhatsApp voice-note format) ──
-// The wasm glue is UMD; both script-tag and Vite-import loading failed to
-// land its export on window inside the Even WebView. So:
-// fetch the sources as TEXT and run them through new Function with
-// module/exports/define shadowed as LOCAL params — the UMD then takes its
-// documented browser branch (root = window → window.OpusEncoderLib), and
-// the muxer's top-level `var OggOpusEncoder` is captured via the return.
-// The glue fetches its .wasm via window.OPUS_SCRIPT_LOCATION (set before).
-// Files live in public/opus/ (MIT: opus-encdec).
-declare global { interface Window { OpusEncoderLib?: any; OggOpusEncoder?: any; OPUS_SCRIPT_LOCATION?: string } }
-let opusLoader: Promise<void> | null = null;
-async function fetchText(url: string): Promise<string> {
-  const r = await fetch(url);
-  if (!r.ok) throw new Error("fetch failed: " + url + " (" + r.status + ")");
-  const t = await r.text();
-  if (t.trimStart().startsWith("<")) throw new Error("server returned HTML for " + url);
-  return t;
-}
-async function ensureOpus(): Promise<void> {
+// The opus-encdec wasm glue (MIT) ships as a static ES module in
+// src/glasses/opus/. Its UMD wrapper was patched once at build time so the
+// Emscripten Module object reads globalThis.__OPUS_MOD__ — we prefill that
+// with the wasm bytes (imported as a URL asset) before importing the glue,
+// so the glue never fetches anything itself. No dynamic code evaluation.
+let opusLoader: Promise<{ lib: any; OggOpusEncoder: any }> | null = null;
+async function ensureOpus(): Promise<{ lib: any; OggOpusEncoder: any }> {
   if (!opusLoader) {
     opusLoader = (async () => {
-      const [glueSrc, muxerSrc, wasmBytes] = await Promise.all([
-        fetchText("/opus/libopus-encoder.wasm.min.js"),
-        fetchText("/opus/oggOpusEncoder.js"),
-        fetch("/opus/libopus-encoder.wasm.min.wasm").then((r) => {
-          if (!r.ok) throw new Error("wasm fetch failed (" + r.status + ")");
-          return r.arrayBuffer();
-        }).then((b) => new Uint8Array(b)),
-      ]);
-      // The Emscripten glue declares `var Module={}` INSIDE its UMD factory,
-      // so a global window.Module is shadowed and never seen (and
-      // document.currentScript is null inside new Function → its own wasm
-      // fetch fails → "sync fetching of the wasm failed"). Fix: hand the wasm
-      // bytes to that exact local object by rewriting the declaration, and
-      // only clean up AFTER the async instantiation finished.
-      const mod: any = { wasmBinary: wasmBytes };
-      (window as any).__OPUS_MOD__ = mod;
-      const patched = glueSrc.replace("var Module={};", "var Module=window.__OPUS_MOD__;");
-      if (patched === glueSrc) throw new Error("opus glue patch point not found");
-      let muxer: any;
+      const wasmUrl = (await import("./opus/libopus-encoder.wasm.wasm?url")).default;
+      const wasmBytes = new Uint8Array(await (await fetch(wasmUrl)).arrayBuffer());
+      (globalThis as any).__OPUS_MOD__ = { wasmBinary: wasmBytes };
       try {
-        muxer = new Function("module", "exports", "define",
-          patched + "\n" + muxerSrc + "\nreturn typeof OggOpusEncoder !== 'undefined' ? OggOpusEncoder : undefined;"
-        )(undefined, undefined, undefined);
-        const lib = window.OpusEncoderLib;
-        if (!lib) throw new Error("OpusEncoderLib missing (glue export failed)");
-        if (!muxer) throw new Error("OggOpusEncoder missing (muxer export failed)");
-        window.OggOpusEncoder = muxer;
+        // side-effect import: the patched glue assigns globalThis.OpusEncoderLib
+        await import("./opus/libopus-encoder.js");
+        const { OggOpusEncoder } = await import("./opus/oggOpusEncoder.js");
+        const lib = (globalThis as any).OpusEncoderLib;
+        if (!lib) throw new Error("OpusEncoderLib missing after import");
+        if (!OggOpusEncoder) throw new Error("OggOpusEncoder missing after import");
         if (!lib.isReady) {
           await new Promise<void>((res, rej) => {
             const t = setTimeout(() => rej(new Error("Opus init timeout (5s)")), 5000);
             lib.onready = () => { clearTimeout(t); res(); };
           });
         }
+        return { lib, OggOpusEncoder };
       } finally {
-        delete (window as any).__OPUS_MOD__;
+        delete (globalThis as any).__OPUS_MOD__;
       }
-      console.log("[rec] opus encoder ready");
     })().catch((e) => { opusLoader = null; throw e; });
   }
   return opusLoader;
 }
 
 /** int16-LE mono PCM (16 kHz) → OGG/Opus voice-note blob (16 kHz wideband, 32 kbps). */
-declare global { interface Window { OggOpusEncoder?: any } }
 export async function pcmToOggOpusBlob(pcm: Uint8Array): Promise<Blob> {
-  await ensureOpus();
-  const lib = window.OpusEncoderLib as any;
-  const OggOpusEncoder = window.OggOpusEncoder as any;
-  if (!OggOpusEncoder) throw new Error("OggOpusEncoder missing");
+  const { lib, OggOpusEncoder } = await ensureOpus();
   const enc = new OggOpusEncoder({
     encoderApplication: 2048, // VoIP — what WhatsApp uses for voice notes
     // encode natively at the mic's 16 kHz (wideband): no pointless up-resample

@@ -373,3 +373,4 @@ if(typeof exports !== 'undefined'){
 } else if(typeof module === 'object' && module && module.exports){
   module.exports.OggOpusEncoder = OggOpusEncoder;
 }
+export { OggOpusEncoder };
