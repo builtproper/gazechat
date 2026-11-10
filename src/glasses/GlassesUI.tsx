@@ -2701,9 +2701,10 @@ export function GlassesUI({
             return nav;
           }
           // Even Hub submission requirement: root-page double-tap must show
-          // the native exit dialogue. See page-lifecycle.md.
-          // The unified chat list is the root screen now.
-          if (snapshot.currentScreen === "chats") {
+          // the native exit dialogue — on the chat list AND on the startup
+          // screen (a fresh launch without phone connection must be able to
+          // exit too, Hub review 09.11.). The unified chat list is the root.
+          if (snapshot.currentScreen === "chats" || snapshot.currentScreen === "startup") {
             void getBridge().then((b) => b?.shutDownPageContainer(1));
             return nav;
           }
