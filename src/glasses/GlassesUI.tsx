@@ -770,6 +770,18 @@ function filterChats(chats: any[], filter: "normal" | "low" | "archived"): any[]
   return chats.filter((c) => !c.isLowPriority && !c.isArchived);
 }
 
+// 16.11.: signature of EVERYTHING a chat-list row renders (name, preview,
+// unread badge, time, draft marker, filter membership, pinned order, media
+// label). Two identical signatures ⇒ identical pixels ⇒ an auto-refresh can
+// skip setState and every bridge write entirely.
+function chatListSig(chats: any[], filter: "normal" | "low" | "archived"): string {
+  return filterChats(chats, filter)
+    .map((c) => `${c.id}|${c.title}|${c.preview?.text ?? ""}|${c.unreadCount ?? 0}|`
+      + `${c.lastActivity ?? ""}|${c.draft ? 1 : 0}|${c.isLowPriority ? 1 : 0}|`
+      + `${c.isArchived ? 1 : 0}|${c.isPinned ? 1 : 0}|${mediaRawTypeCache.get(c.id) ?? ""}`)
+    .join(";");
+}
+
 function filterLabel(filter: "normal" | "low" | "archived"): string {
   // center each line inside the 54px column (space ≈ 6px → px/12 = spaces)
   const c = (s: string) => " ".repeat(Math.max(0, Math.round((54 - textPx(s)) / 12))) + s;
@@ -1164,7 +1176,10 @@ function inputBright(): number {
 }
 
 let composePoll: ReturnType<typeof setInterval> | null = null;
-const COMPOSE_PX = 520; // usable width of the glasses input container
+// 520→494 (16.11.): the ‹/› scroll markers are appended OUTSIDE the width
+// budget, so long lines could overflow and the firmware clipped the last
+// word. 26px ≈ 2 chars of headroom.
+const COMPOSE_PX = 494; // usable width of the glasses input container
 
 function composeWindow(): string {
   const text = composeText;
@@ -1536,8 +1551,11 @@ export function GlassesUI({
   const chatCursorRef = useRef<string | null>(null);
   const chatHasMoreRef = useRef<boolean>(false);
   const chatLoadingMoreRef = useRef<boolean>(false);
-  // background poll result waiting to be applied by a pull-up at the top
-  const pendingChatsRef = useRef<{ chats: BeeperChat[]; cursor: string | null; hasMore: boolean } | null>(null);
+  // 16.11.: auto-refresh applies directly on page 1 — this holds the last
+  // APPLIED signature so an unchanged poll costs zero bridge traffic.
+  const chatPollSigRef = useRef<string>("");
+  // set by the chats-poll effect; called on messages→chats transitions
+  const chatRefreshFnRef = useRef<(() => void) | null>(null);
   const msgBlockRef = useRef<number>(0);
   const msgFocusRef = useRef<number>(-1); // focused msg index, -1 = mic
   const micDimRef = useRef<boolean>(false);
@@ -2078,39 +2096,73 @@ export function GlassesUI({
   useEffect(() => {
     if (!beeper) return;
 
-    const pollChats = async () => {
+    // Fetch the top page and apply it ONLY when the rendered rows actually
+    // changed (chatListSig). poll=true = the 5s auto-refresh: restricted to
+    // page 1 (user rule 16.11.) so deep pages are never reordered under the
+    // cursor by background traffic. poll=false = one-shot refresh right
+    // after returning from a chat (read state / previews must be fresh).
+    const refreshChats = async (poll: boolean) => {
       if (isChatsPollInFlightRef.current) return;
       // Gemini Q9: while all 3 asset slots are busy (avatar burst on page
-      // turns), skip this 5s tick instead of queueing behind them
+      // turns), skip this tick instead of queueing behind them
       if (getActiveScheduledFetches() >= FETCH_MAX) return;
+      // never merge while a load-more crawl is appending — would race the tail
+      if (chatLoadingMoreRef.current) return;
+      if (stateRef.current.currentScreen !== "chats") return;
+      if (poll && Math.floor(navRef.current.highlightedIndex / 5) !== 0) return;
       isChatsPollInFlightRef.current = true;
 
       try {
-        // SPARING poll: only while sitting on page 1 / entry 1,
-        // and the result is only STASHED — it gets applied when the user
-        // pulls up at the top, never yanking the list around underneath them
-        if (stateRef.current.currentScreen !== "chats") {
-          return;
-        }
-        if (navRef.current.highlightedIndex !== 0) {
-          return;
-        }
-        if (!beeper) return;
         const seq = ++chatCrawlSeq;
         const res = await beeper.listChats(
           state.selectedAccount ? { accountIDs: [state.selectedAccount] } : undefined,
         );
         if (seq !== chatCrawlSeq || !res.chats.length) return;
-        if (stateRef.current.chats.length === 0) {
+        // user may have dived into a chat while we fetched — never rebuild
+        // the list behind the messages screen
+        if (stateRef.current.currentScreen !== "chats") return;
+        const cur = stateRef.current.chats;
+        if (cur.length === 0) {
           // FIRST load (empty list): apply directly — stashing here left the
           // list on "No chats" forever (02.11. sim-verified bug)
           chatCursorRef.current = res.cursor ?? null;
           chatHasMoreRef.current = !!res.hasMore;
           chatPageSigRef.current = "";
+          chatPollSigRef.current = chatListSig(res.chats, chatFilterRef.current);
           setState((st) => ({ ...st, chats: res.chats, isLoading: false, setupRequired: false }));
           return;
         }
-        pendingChatsRef.current = { chats: res.chats, cursor: res.cursor ?? null, hasMore: !!res.hasMore };
+        const freshIds = new Set(res.chats.map((c: { id: string }) => c.id));
+        // fresh top page first, then previously loaded chats the poll did
+        // not cover (order within them is stale but stable)
+        const rest = cur.filter((c: { id: string }) => !freshIds.has(c.id));
+        const merged = [...res.chats, ...rest];
+        const sig = chatListSig(merged, chatFilterRef.current);
+        if (sig === chatPollSigRef.current) return; // unchanged → zero bridge traffic
+        console.log("[chats] auto-refresh: content changed → rebuild");
+        // cursor rule: the poll only knows page 1 — adopt its cursor only
+        // when nothing deeper was loaded yet, else load-more would re-fetch
+        // pages that are already in the list
+        if (cur.length <= res.chats.length) {
+          chatCursorRef.current = res.cursor ?? null;
+          chatHasMoreRef.current = !!res.hasMore;
+        }
+        // keep the selection on the SAME chat across a reorder (a new
+        // message bumps its chat to the top — the cursor follows it)
+        const oldIdx = navRef.current.highlightedIndex;
+        const anchorId: string | undefined = filterChats(cur, chatFilterRef.current)[oldIdx]?.id;
+        chatPollSigRef.current = sig;
+        chatPageSigRef.current = ""; // force list rebuild with fresh data
+        setState((st) => ({ ...st, chats: merged }));
+        if (anchorId) {
+          const ni = filterChats(merged, chatFilterRef.current)
+            .findIndex((c: { id: string }) => c.id === anchorId);
+          if (ni >= 0 && ni !== oldIdx) {
+            navRef.current = { ...navRef.current, highlightedIndex: ni };
+            chatListIndexRef.current = ni;
+            setNavVersion((v) => v + 1);
+          }
+        }
       } catch (e) {
         console.warn("[GlassesUI] Chat polling failed:", e);
       } finally {
@@ -2118,10 +2170,15 @@ export function GlassesUI({
       }
     };
 
-    pollChats();
-    chatsPollIntervalRef.current = setInterval(pollChats, 5000);
+    // one-shot refresh for the messages→chats transition (set even while the
+    // interval itself is page-1-gated)
+    chatRefreshFnRef.current = () => { void refreshChats(false); };
+
+    void refreshChats(true);
+    chatsPollIntervalRef.current = setInterval(() => { void refreshChats(true); }, 5000);
 
     return () => {
+      chatRefreshFnRef.current = null;
       if (chatsPollIntervalRef.current) {
         clearInterval(chatsPollIntervalRef.current);
         chatsPollIntervalRef.current = null;
@@ -2229,6 +2286,7 @@ export function GlassesUI({
       setState((st) => {
         const seen = new Set(st.chats.map((c) => c.id));
         const merged = [...st.chats, ...res.chats.filter((c) => !seen.has(c.id))];
+        chatPollSigRef.current = chatListSig(merged, chatFilterRef.current);
         return { ...st, chats: merged };
       });
       chatCursorRef.current = res.cursor ?? null;
@@ -2572,27 +2630,6 @@ export function GlassesUI({
           }
 
           const maxIdx = getMaxIndex(snapshot, chatFilterRef.current);
-          // pull UP at the very top: apply a pending poll refresh (if any)
-          if (action.direction === "up" && nav.highlightedIndex === 0 && pendingChatsRef.current) {
-            const pend = pendingChatsRef.current;
-            pendingChatsRef.current = null;
-            // cursor rule: the poll only knows page 1 — adopt its cursor
-            // only when nothing deeper was loaded yet, else load-more would
-            // re-fetch pages that are already in the list
-            if (snapshot.chats.length <= pend.chats.length) {
-              chatCursorRef.current = pend.cursor;
-              chatHasMoreRef.current = pend.hasMore;
-            }
-            setState((st) => {
-              const freshIds = new Set(pend.chats.map((c: { id: string }) => c.id));
-              // fresh top page first, then previously loaded chats that the
-              // poll did not cover (order within them is stale but stable)
-              const rest = st.chats.filter((c: { id: string }) => !freshIds.has(c.id));
-              return { ...st, chats: [...pend.chats, ...rest] };
-            });
-            chatPageSigRef.current = ""; // force list rebuild with fresh data
-            return nav;
-          }
           const newIdx = Math.max(
             0,
             Math.min(
@@ -3446,6 +3483,11 @@ export function GlassesUI({
           const idx = list.findIndex((c: { id: string }) => c.id === anchor);
           if (idx >= 0) chatListIndexRef.current = idx;
         }
+        // 16.11.: fresh list data right after leaving a chat (read receipts,
+        // new previews, cleared unread badges). Sig-gated: no change → no
+        // write; the async apply re-checks the screen and keeps the cursor
+        // anchored to the same chat id.
+        chatRefreshFnRef.current?.();
       }
       navRef.current = {
         highlightedIndex: state.currentScreen === "chats" ? chatListIndexRef.current : 0,
@@ -3520,7 +3562,7 @@ export function GlassesUI({
             if (chatFilterRef.current !== next) {
               chatFilterRef.current = next;
               chatPageSigRef.current = "";
-              pendingChatsRef.current = null;
+              chatPollSigRef.current = chatListSig(stateRef.current.chats, next);
               chatCursorRef.current = null;
               chatHasMoreRef.current = false;
               navRef.current = { ...navRef.current, highlightedIndex: 0 };
